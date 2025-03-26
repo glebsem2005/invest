@@ -650,6 +650,32 @@ class AdminLoadPromptsHandler(BaseScenario):
         dp.register_message_handler(self.process, commands=['load_prompts'], state='*')
 
 
+class AdminHelpHandler(BaseScenario):
+    """Обработка команды /help для администратора."""
+
+    async def process(self, message: types.Message, **kwargs) -> None:
+        user_id = message.from_user.id
+
+        if user_id not in config.ADMIN_USERS:
+            await message.answer('У вас нет прав для выполнения этой команды.')
+            return
+
+        help_text = (
+            '🔑 Административные команды:\n\n'
+            '/update_prompts - Обновление существующего системного промпта. Позволяет выбрать тему и загрузить '
+            'новый TXT-файл с содержимым промпта.\n\n'
+            '/new_prompt - Создание нового топика и системного промпта. Проведет через процесс создания '
+            'нового топика с указанием технического имени, отображаемого названия и загрузкой файла промпта.\n\n'
+            '/load_prompts - Выгрузка всех системных промптов в виде TXT-файлов для просмотра или редактирования.\n\n'
+            '/start - Перезапуск бота и возврат к выбору темы анализа.'
+        )
+
+        await message.answer(self._escape_markdown(help_text), parse_mode='MarkdownV2')
+
+    def register(self, dp: Dispatcher) -> None:
+        dp.register_message_handler(self.process, commands=['help'], state='*')
+
+
 class BotManager:
     scenarios: Dict[str, BaseScenario] = {}
 
@@ -677,6 +703,7 @@ class BotManager:
         'new_prompt_upload': AdminNewPromptUploadHandler,
         'new_prompt_text': AdminNewPromptTextHandler,
         'load_prompts': AdminLoadPromptsHandler,
+        'help': AdminHelpHandler,
     }
 
     def __init__(self, bot: Bot, dp: Dispatcher) -> None:
