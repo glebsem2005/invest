@@ -98,9 +98,16 @@ class BaseScenario(ABC):
         pass
 
     def _escape_markdown(self, text: str) -> str:
-        """Экранирует специальные символы для MarkdownV2."""
-        escape_chars = r'_*[]()~`>#+-=|{}.!'
-        return ''.join(f'\\{c}' if c in escape_chars else c for c in text)
+        """Экранирует специальные символы Markdown."""
+        try:
+            chars = '_*[]()~`>#+-=|{}.!'
+            for char in chars:
+                text = text.replace(char, f'\\{char}')
+            logger.debug(f'Успешно экранирован текст для Markdown, размер: {len(text)} символов')
+            return text
+        except Exception as e:
+            logger.error(f'Ошибка при экранировании текста для Markdown: {e}')
+            return text
 
 
 class Access(BaseScenario):
@@ -111,6 +118,7 @@ class Access(BaseScenario):
 
     async def authorize_process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
         user_id = callback_query.from_user.id
+        logger.info(f'Авторизация пользователя {user_id}')
         msg = 'Доступ получен.'
         await bot.send_message(chat_id=user_id, text=msg)
         admin_msg = f'Пользователь {user_id} успешно авторизован.'
@@ -119,6 +127,7 @@ class Access(BaseScenario):
 
     async def decline_process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
         user_id = callback_query.from_user.id
+        logger.info(f'Отклонение авторизации пользователя {user_id}')
         msg = 'Доступ запрещен.'
         await bot.send_message(chat_id=user_id, text=msg)
         admin_msg = f'Пользователь {user_id} отклонен.'
@@ -143,7 +152,11 @@ class StartHandler(BaseScenario):
 
     async def process(self, message: types.Message, **kwargs) -> None:
         user_id = message.from_user.id
+        user_name = f'{message.from_user.first_name} {message.from_user.last_name}'
+        logger.info(f'Команда /start от пользователя {user_id} ({user_name})')
+
         if user_id not in config.AUTHORIZED_USERS_IDS:
+            logger.info(f'Запрос авторизации для {user_id} к администраторам {config.ADMIN_USERS}')
             await message.answer('Запрашиваю доступ у администратора.')
             user_first_name = message.from_user.first_name
             user_last_name = message.from_user.last_name
@@ -171,6 +184,8 @@ class ProcessingChooseTopicCallback(BaseScenario):
         topic_callback = callback_query.data
         topic_name = topic_callback.replace('topic_', '')
 
+        logger.info(f'Пользователь {user_id} выбрал тему: {topic_name}')
+
         system_prompts = SystemPrompts()
         system_prompt = system_prompts.get_prompt(SystemPrompt[topic_name.upper()])
 
@@ -195,8 +210,11 @@ class ProcessingChooseModelCallback(BaseScenario):
     """Обработка выбора модели."""
 
     async def process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
+        user_id = callback_query.from_user.id
         model_callback = callback_query.data
         model_name = model_callback.replace('model_', '')
+
+        logger.info(f'Пользователь {user_id} выбрал модель: {model_name}')
 
         selected_model = Models[model_name]
 
@@ -207,7 +225,6 @@ class ProcessingChooseModelCallback(BaseScenario):
         )
 
         await state.update_data(prompt_message_id=prompt_message.message_id)
-
         await UserStates.ENTERING_PROMPT.set()
         await callback_query.answer()
 
@@ -228,18 +245,24 @@ class ProcessingEnterPromptHandler(BaseScenario):
         topic_name = user_data['chosen_topic']
         model_name = user_data['chosen_model']
 
+        logger.info(f'Запрос от {user_id}: модель={model_name}, тема={topic_name}, тип={message.content_type}')
+
         if 'prompt_message_id' in user_data:
             try:
                 await self.bot.delete_message(chat_id=user_id, message_id=user_data['prompt_message_id'])
             except Exception as e:
-                logger.error(f'Не удалось удалить сообщение: {e}')
+                logger.error(f'Ошибка удаления сообщения {user_data["prompt_message_id"]}: {e}')
 
         file_content = ''
         if message.document:
+            file_name = message.document.file_name
+            file_size = message.document.file_size
+            logger.info(f'Обработка файла: {file_name} ({file_size} байт)')
             try:
                 file_content = await FileProcessor.extract_text_from_file(message.document, self.bot)
+                logger.info(f'Извлечено {len(file_content)} символов из файла {file_name}')
             except ValueError as e:
-                logger.error(f'Error processing file: {e}')
+                logger.error(f'Ошибка обработки файла {file_name}: {e}')
                 await message.answer(f'Ошибка при обработке файла: {e}')
                 return
 
@@ -248,26 +271,27 @@ class ProcessingEnterPromptHandler(BaseScenario):
 
         chat_context = ChatContextManager()
         chat_context.add_message(user_id, topic_name, 'user', full_query)
-
         messages = chat_context.get_messages_for_api(user_id, topic_name)
+        logger.info(f'Подготовлено {len(messages)} сообщений для API, размер запроса: {len(full_query)} символов')
 
         model = Models[model_name].value
         model_api = ModelAPI(model())
 
         try:
             await self.bot.send_chat_action(chat_id=user_id, action='typing')
+            logger.info(f'Отправка запроса к {model_name} для пользователя {user_id}')
 
             response = await model_api.get_response(messages)
+            logger.info(f'Получен ответ от {model_name}, длина: {len(response)} символов')
 
             chat_context.add_message(user_id, topic_name, 'assistant', response)
-
             escaped_response = self._escape_markdown(response)
 
             await message.answer(escaped_response, parse_mode='MarkdownV2')
             await message.answer('Остались ли у Вас вопросы?', reply_markup=ContinueKeyboard())
             await UserStates.ASKING_CONTINUE.set()
         except Exception as e:
-            logger.error(f'Error in model response: {e}')
+            logger.error(f'Ошибка API {model_name}: {e}', exc_info=True)
             await message.answer(
                 'Произошла ошибка при получении ответа. Попробуйте еще раз или выберите другую модель введя команду `/start`.',
             )
@@ -293,8 +317,11 @@ class ProcessingContinueCallback(BaseScenario):
         topic_name = user_data['chosen_topic']
         continue_dialog = callback_query.data == 'continue_yes'
 
-        chat_context = ChatContextManager()
+        logger.info(
+            f'Пользователь {user_id} решил {"продолжить" if continue_dialog else "завершить"} диалог по теме {topic_name}',
+        )
 
+        chat_context = ChatContextManager()
         await callback_query.message.delete()
 
         if continue_dialog:
@@ -302,11 +329,11 @@ class ProcessingContinueCallback(BaseScenario):
                 'Введите ваш следующий вопрос или загрузите новый документ (PDF, Word, PPT):',
             )
             await state.update_data(prompt_message_id=prompt_message.message_id)
-
             await UserStates.ENTERING_PROMPT.set()
         else:
             chat_context.end_chat(user_id, topic_name)
             chat_context.cleanup_user_context(user_id)
+            logger.info(f'Очищен контекст чата для пользователя {user_id}')
 
             await state.finish()
             await callback_query.message.answer('Чем я могу вам помочь?', reply_markup=TopicKeyboard())
@@ -331,18 +358,26 @@ class ContinueDialogHandler(BaseScenario):
         topic_name = user_data['chosen_topic']
         model_name = user_data['chosen_model']
 
+        logger.info(
+            f'Продолжение диалога: {user_id}, модель={model_name}, тема={topic_name}, тип={message.content_type}'
+        )
+
         if 'prompt_message_id' in user_data:
             try:
                 await self.bot.delete_message(chat_id=user_id, message_id=user_data['prompt_message_id'])
             except Exception as e:
-                logger.error(f'Не удалось удалить сообщение: {e}')
+                logger.error(f'Ошибка удаления сообщения {user_data["prompt_message_id"]}: {e}')
 
         file_content = ''
         if message.document:
+            file_name = message.document.file_name
+            file_size = message.document.file_size
+            logger.info(f'Обработка файла: {file_name} ({file_size} байт)')
             try:
                 file_content = await FileProcessor.extract_text_from_file(message.document, self.bot)
+                logger.info(f'Извлечено {len(file_content)} символов из файла {file_name}')
             except ValueError as e:
-                logger.error(f'Error processing file: {e}')
+                logger.error(f'Ошибка обработки файла {file_name}: {e}')
                 await message.answer(f'Ошибка при обработке файла: {e}')
                 return
 
@@ -351,26 +386,27 @@ class ContinueDialogHandler(BaseScenario):
 
         chat_context = ChatContextManager()
         chat_context.add_message(user_id, topic_name, 'user', full_query)
-
         messages = chat_context.get_messages_for_api(user_id, topic_name)
+        logger.info(f'Подготовлено {len(messages)} сообщений для API, размер запроса: {len(full_query)} символов')
 
         model = Models[model_name].value
         model_api = ModelAPI(model())
 
         try:
             await self.bot.send_chat_action(chat_id=user_id, action='typing')
+            logger.info(f'Отправка запроса к {model_name} для пользователя {user_id}')
 
             response = await model_api.get_response(messages)
+            logger.info(f'Получен ответ от {model_name}, длина: {len(response)} символов')
 
             chat_context.add_message(user_id, topic_name, 'assistant', response)
-
             escaped_response = self._escape_markdown(response)
 
             await message.answer(escaped_response, parse_mode='MarkdownV2')
             await message.answer('Остались ли у Вас вопросы?', reply_markup=ContinueKeyboard())
             await UserStates.ASKING_CONTINUE.set()
         except Exception as e:
-            logger.error(f'Error in model response: {e}')
+            logger.error(f'Ошибка API {model_name}: {e}', exc_info=True)
             await message.answer(
                 'Произошла ошибка при получении ответа. Попробуйте еще раз или выберите другую модель введя команду `/start`.',
             )
@@ -388,13 +424,16 @@ class AdminUpdatePromptsHandler(BaseScenario):
 
     async def process(self, message: types.Message, **kwargs) -> None:
         user_id = message.from_user.id
+        logger.info(f'Запрос на обновление промптов от пользователя {user_id}')
 
         if user_id not in config.ADMIN_USERS:
+            logger.warning(f'Отказано в доступе пользователю {user_id} - не является администратором')
             await message.answer('У вас нет прав для выполнения этой команды.')
             return
 
         await message.answer('Выберите тему промпта для обновления:', reply_markup=AdminPromptKeyboard())
         await AdminStates.CHOOSING_PROMPT.set()
+        logger.info(f'Пользователь {user_id} переведен в режим выбора промпта для обновления')
 
     def register(self, dp: Dispatcher) -> None:
         dp.register_message_handler(
@@ -408,15 +447,17 @@ class AdminChoosePromptCallback(BaseScenario):
     """Обработка выбора промпта для обновления."""
 
     async def process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
+        user_id = callback_query.from_user.id
         prompt_callback = callback_query.data
         topic_name = prompt_callback.replace('prompt_', '')
 
+        logger.info(f'Администратор {user_id} выбрал промпт {topic_name} для обновления')
         await state.update_data(chosen_prompt=topic_name)
 
         await callback_query.message.delete()
         await callback_query.message.answer('Загрузите TXT-файл с новым содержимым промпта:')
-
         await AdminStates.UPLOADING_PROMPT.set()
+        logger.info(f'Пользователь {user_id} переведен в режим загрузки промпта')
         await callback_query.answer()
 
     def register(self, dp: Dispatcher) -> None:
@@ -431,9 +472,16 @@ class AdminUploadPromptHandler(BaseScenario):
     """Обработка загрузки файла с новым промптом."""
 
     async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
+        user_id = message.from_user.id
         user_data = await state.get_data()
         topic_name = user_data['chosen_prompt']
+
+        logger.info(f'Получен файл для обновления промпта {topic_name} от администратора {user_id}')
+
         if not message.document or not message.document.file_name.endswith('.txt'):
+            logger.warning(
+                f'Неверный формат файла от пользователя {user_id}: {message.document.file_name if message.document else "нет файла"}'
+            )
             await message.answer('Пожалуйста, загрузите файл в формате TXT.')
             return
 
@@ -441,26 +489,32 @@ class AdminUploadPromptHandler(BaseScenario):
         file = await self.bot.get_file(file_id)
         file_path = file.file_path
         downloaded_file = await self.bot.download_file(file_path)
+        logger.debug(f'Файл {message.document.file_name} успешно загружен')
 
         file_content = downloaded_file.read().decode('utf-8')
+        logger.debug(f'Размер содержимого промпта: {len(file_content)} символов')
 
         try:
             system_prompts = SystemPrompts()
             system_prompts.set_prompt(SystemPrompt[topic_name.upper()], file_content)
+            logger.info(f'Промпт {topic_name} успешно обновлен администратором {user_id}')
 
             TopicKeyboard.reset_instance()
             AdminPromptKeyboard.reset_instance()
+            logger.debug('Клавиатуры сброшены')
 
             await message.answer(f"Промпт для темы '{Topics[topic_name].value}' успешно обновлен!")
         except KeyError:
+            logger.error(f'Ошибка: тема {topic_name} не найдена')
             await message.answer(f"Ошибка: тема '{topic_name}' не найдена.")
         except Exception as e:
-            logger.error(f'Ошибка при обновлении промпта: {e}')
+            logger.error(f'Ошибка при обновлении промпта: {e}', exc_info=True)
             await message.answer(f'Произошла ошибка при обновлении промпта: {e}')
 
         await state.finish()
         await message.answer('Чем я могу вам помочь?', reply_markup=TopicKeyboard())
         await UserStates.CHOOSING_TOPIC.set()
+        logger.info(f'Администратор {user_id} вернулся в режим выбора темы')
 
     def register(self, dp: Dispatcher) -> None:
         dp.register_message_handler(
@@ -474,6 +528,8 @@ class AdminUploadPromptTextHandler(BaseScenario):
     """Обработка ввода текста вместо загрузки файла."""
 
     async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
+        user_id = message.from_user.id
+        logger.warning(f'Администратор {user_id} отправил текст вместо файла при обновлении промпта')
         await message.answer('Пожалуйста, загрузите TXT-файл с новым содержимым промпта.')
 
     def register(self, dp: Dispatcher) -> None:
@@ -489,8 +545,10 @@ class AdminNewPromptHandler(BaseScenario):
 
     async def process(self, message: types.Message, **kwargs) -> None:
         user_id = message.from_user.id
+        logger.info(f'Запрос на создание нового промпта от пользователя {user_id}')
 
         if user_id not in config.ADMIN_USERS:
+            logger.warning(f'Отказано в доступе пользователю {user_id} - не является администратором')
             await message.answer('У вас нет прав для выполнения этой команды.')
             return
 
@@ -499,6 +557,7 @@ class AdminNewPromptHandler(BaseScenario):
             'Шаг 1: Введите техническое имя нового топика (на английском, без пробелов):',
         )
         await AdminStates.NEW_PROMPT_NAME.set()
+        logger.info(f'Администратор {user_id} начал процесс создания нового промпта')
 
     def register(self, dp: Dispatcher) -> None:
         dp.register_message_handler(self.process, commands=['new_prompt'], state='*')
@@ -508,19 +567,24 @@ class AdminNewPromptNameHandler(BaseScenario):
     """Обработка ввода технического имени нового топика."""
 
     async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
+        user_id = message.from_user.id
         prompt_name = message.text.strip().lower()
+        logger.info(f'Получено техническое имя нового промпта от администратора {user_id}: {prompt_name}')
 
         if not prompt_name.isalnum() or not prompt_name.isascii():
+            logger.warning(f'Некорректное имя промпта: {prompt_name}')
             await message.answer('Имя должно содержать только латинские буквы и цифры. Попробуйте еще раз:')
             return
 
         if prompt_name in Topics.__members__:
+            logger.warning(f'Промпт с именем {prompt_name} уже существует')
             await message.answer(f"Топик с именем '{prompt_name}' уже существует. Введите другое имя:")
             return
 
         await state.update_data(new_prompt_name=prompt_name)
         await message.answer('Шаг 2: Введите отображаемое название топика (на русском):')
         await AdminStates.NEW_PROMPT_DISPLAY.set()
+        logger.info(f'Администратор {user_id} перешел к вводу отображаемого имени для промпта {prompt_name}')
 
     def register(self, dp: Dispatcher) -> None:
         dp.register_message_handler(
@@ -534,9 +598,15 @@ class AdminNewPromptDisplayHandler(BaseScenario):
     """Обработка ввода отображаемого имени нового топика."""
 
     async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
+        user_id = message.from_user.id
         display_name = message.text.strip()
+        user_data = await state.get_data()
+        prompt_name = user_data['new_prompt_name']
+
+        logger.info(f'Получено отображаемое имя для промпта {prompt_name} от администратора {user_id}: {display_name}')
 
         if not display_name:
+            logger.warning(f'Пустое отображаемое имя для промпта {prompt_name}')
             await message.answer('Отображаемое имя не может быть пустым. Введите отображаемое имя:')
             return
 
@@ -546,6 +616,7 @@ class AdminNewPromptDisplayHandler(BaseScenario):
             f"Шаг 3: Загрузите TXT-файл с системным промптом для топика '{display_name}':",
         )
         await AdminStates.NEW_PROMPT_UPLOAD.set()
+        logger.info(f'Администратор {user_id} перешел к загрузке файла для нового промпта {prompt_name}')
 
     def register(self, dp: Dispatcher) -> None:
         dp.register_message_handler(
@@ -559,11 +630,17 @@ class AdminNewPromptUploadHandler(BaseScenario):
     """Обработка загрузки файла с системным промптом."""
 
     async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
+        user_id = message.from_user.id
         user_data = await state.get_data()
         prompt_name = user_data['new_prompt_name']
         display_name = user_data['new_prompt_display']
 
+        logger.info(f'Получен файл для нового промпта {prompt_name} от администратора {user_id}')
+
         if not message.document or not message.document.file_name.endswith('.txt'):
+            logger.warning(
+                f'Неверный формат файла от пользователя {user_id}: {message.document.file_name if message.document else "нет файла"}'
+            )
             await message.answer('Пожалуйста, загрузите файл в формате TXT.')
             return
 
@@ -571,20 +648,23 @@ class AdminNewPromptUploadHandler(BaseScenario):
         file = await self.bot.get_file(file_id)
         file_path = file.file_path
         downloaded_file = await self.bot.download_file(file_path)
+        logger.debug(f'Файл {message.document.file_name} успешно загружен')
 
         file_content = downloaded_file.read().decode('utf-8')
+        logger.debug(f'Размер содержимого нового промпта: {len(file_content)} символов')
 
         try:
             system_prompts = SystemPrompts()
-
             system_prompts.add_new_prompt(prompt_name, display_name, file_content)
+            logger.info(f'Новый промпт {prompt_name} ({display_name}) успешно добавлен администратором {user_id}')
 
             TopicKeyboard.reset_instance()
             AdminPromptKeyboard.reset_instance()
+            logger.debug('Клавиатуры сброшены')
 
             await message.answer(f"Системный промпт для топика '{display_name}' успешно добавлен!\n")
         except Exception as e:
-            logger.error(f'Ошибка при добавлении системного промпта: {e}')
+            logger.error(f'Ошибка при добавлении системного промпта: {e}', exc_info=True)
             await message.answer(
                 f'Произошла ошибка при добавлении системного промпта.\nСообщение об ошибке уже отправлено разработчику.',
             )
@@ -597,6 +677,7 @@ class AdminNewPromptUploadHandler(BaseScenario):
         await state.finish()
         await message.answer('Чем я могу вам помочь?', reply_markup=TopicKeyboard())
         await UserStates.CHOOSING_TOPIC.set()
+        logger.info(f'Администратор {user_id} вернулся в режим выбора темы')
 
     def register(self, dp: Dispatcher) -> None:
         dp.register_message_handler(
@@ -703,6 +784,9 @@ class BotManager:
         'new_prompt_upload': AdminNewPromptUploadHandler,
         'new_prompt_text': AdminNewPromptTextHandler,
         'load_prompts': AdminLoadPromptsHandler,
+    }
+
+    admin_common_scenario = {
         'help': AdminHelpHandler,
     }
 
@@ -723,6 +807,10 @@ class BotManager:
         for scenario_name, scenario in self.admin_new_system_prompts_scenario.items():
             logger.info(f'Add for registering admin new handler: {scenario_name}')
             self._register_scenario(f'admin_new_{scenario_name}', scenario(bot))
+
+        for scenario_name, scenario in self.admin_common_scenario.items():
+            logger.info(f'Add for registering admin common handler: {scenario_name}')
+            self._register_scenario(f'admin_common_{scenario_name}', scenario(bot))
 
         for scenario in self.scenarios.values():
             scenario.register(dp)
