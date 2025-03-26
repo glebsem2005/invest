@@ -23,15 +23,15 @@ class Config:
         raise ConfigError('Please set `TOKEN` env var.')
 
     @property
-    def OWNER_USER(self) -> int:
-        OWNER_USER = os.getenv('OWNER_USER')
-        if OWNER_USER:
-            return int(OWNER_USER)
-        raise ConfigError('Please set `OWNER_USER` env var.')
+    def OWNER_ID(self) -> int:
+        OWNER_ID = os.getenv('OWNER_ID')
+        if OWNER_ID:
+            return int(OWNER_ID)
+        raise ConfigError('Please set `OWNER_ID` env var.')
 
     @property
-    def ADMIN_USERS(self) -> List[str]:
-        ADMIN_USERS = os.getenv('ADMIN_USER')
+    def ADMIN_USERS(self) -> List[int]:
+        ADMIN_USERS = os.getenv('ADMIN_USERS')
         if ADMIN_USERS:
             return [int(user.strip()) for user in ADMIN_USERS.strip().split(',')]
         raise ConfigError('Please set `ADMIN_USERS` env var.')
@@ -45,4 +45,54 @@ class Config:
 
     @property
     def AUTHORIZED_USERS_IDS(self) -> Set[int]:
-        return set([self.OWNER_USER] + self.ADMIN_USERS + self.USERS)
+        return set([self.OWNER_ID] + self.ADMIN_USERS + self.USERS)
+
+    @property
+    def OPENAI_API_KEY(self) -> str:
+        OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+        if OPENAI_API_KEY:
+            return str(OPENAI_API_KEY)
+        raise ConfigError('Please set `OPENAI_API_KEY` env var.')
+
+    OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-2024-08-06')
+    OPENAI_MAX_TOKENS = os.getenv('OPENAI_MAX_TOKENS', 2000)
+    OPENAI_TEMPERATURE = os.getenv('OPENAI_TEMPERATURE', 0.7)
+
+    @property
+    def GIGACHAT_API_KEY(self) -> str:
+        GIGACHAT_API_KEY = os.getenv('GIGACHAT_API_KEY')
+        if GIGACHAT_API_KEY:
+            return str(GIGACHAT_API_KEY)
+        raise ConfigError('Please set `GIGACHAT_API_KEY` env var.')
+
+    GIGACHAT_VERIFY_SSL = os.getenv('GIGACHAT_VERIFY_SSL', 'True').lower() == 'true'
+    GIGACHAT_SCOPE = os.getenv('GIGACHAT_SCOPE', 'GIGACHAT_API_PERS')
+    GIGACHAT_MODEL = os.getenv('GIGACHAT_MODEL', 'GigaChat')
+    GIGACHAT_MAX_TOKENS = os.getenv('GIGACHAT_MAX_TOKENS', 2000)
+    GIGACHAT_TEMPERATURE = os.getenv('GIGACHAT_TEMPERATURE', 0.7)
+
+    @property
+    def PERPLEXITY_API_KEY(self) -> str:
+        PERPLEXITY_API_KEY = os.getenv('PERPLEXITY_API_KEY')
+        if PERPLEXITY_API_KEY:
+            return str(PERPLEXITY_API_KEY)
+        raise ConfigError('Please set `PERPLEXITY_API_KEY` env var.')
+
+    PERPLEXITY_MODEL = os.getenv('PERPLEXITY_MODEL', 'sonar')
+    PERPLEXITY_MAX_TOKENS = os.getenv('PERPLEXITY_MAX_TOKENS', 1000)
+    PERPLEXITY_TEMPERATURE = os.getenv('PERPLEXITY_TEMPERATURE', 0.2)
+    PERPLEXITY_TOP_P = os.getenv('PERPLEXITY_TOP_P', 0.9)
+    PERPLEXITY_SEARCH_CONTEXT_SIZE = os.getenv('PERPLEXITY_SEARCH_CONTEXT_SIZE', 'high')
+    PERPLEXITY_FREQUENCY_PENALTY = os.getenv('PERPLEXITY_FREQUENCY_PENALTY', 1)
+    PERPLEXITY_PRESENCE_PENALTY = os.getenv('PERPLEXITY_PRESENCE_PENALTY', 0)
+
+    @property
+    def DEEPSEEK_API_KEY(self) -> str:
+        DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
+        if DEEPSEEK_API_KEY:
+            return str(DEEPSEEK_API_KEY)
+        raise ConfigError('Please set `DEEPSEEK_API_KEY` env var.')
+
+    DEEPSEEK_MODEL = os.getenv('DEEPSEEK_MODEL', 'deepseek-chat')
+    DEEPSEEK_MAX_TOKENS = os.getenv('DEEPSEEK_MAX_TOKENS', 2000)
+    DEEPSEEK_TEMPERATURE = os.getenv('DEEPSEEK_TEMPERATURE', 0.7)

@@ -67,7 +67,8 @@ class SystemPrompts:
             raise ValueError(f'Промпта для {prompt_type} не найдено.')
         return prompt
 
-    def set_prompt(self, prompt_type: SystemPrompt, content: str) -> None:
+    def update_prompt(self, prompt_type: SystemPrompt, content: str) -> None:
+        """Обновляет существующий промпт."""
         self.prompts[prompt_type] = content
         filename = DEFAULT_PROMPTS_DIR / f'{prompt_type.value}.txt'
         self.update_or_create_file(content, filename)
@@ -84,3 +85,7 @@ class SystemPrompts:
         self.update_or_create_file(content, filename)
 
         self.prompts[SystemPrompt[name.upper()]] = content
+
+    def set_prompt(self, prompt_type: SystemPrompt, content: str) -> None:
+        """Устанавливает содержимое промпта."""
+        self.update_prompt(prompt_type, content)

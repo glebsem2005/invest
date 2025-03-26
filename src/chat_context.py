@@ -55,14 +55,32 @@ class ChatContextManager:
 
     def start_new_chat(self, user_id: int, topic: str, system_prompt: str) -> None:
         """Начинает новый чат для пользователя по заданной теме."""
+        self.end_active_chats(user_id)
+
         if user_id not in self._contexts:
             self._contexts[user_id] = {}
 
         chat_history = ChatHistory(topic)
-
         chat_history.add_message('system', system_prompt)
-
         self._contexts[user_id][topic] = chat_history
+
+    def end_active_chats(self, user_id: int) -> None:
+        """Завершает все активные чаты пользователя."""
+        if user_id in self._contexts:
+            for topic, history in self._contexts[user_id].items():
+                if history.is_active:
+                    history.mark_as_inactive()
+
+    def cleanup_user_context(self, user_id: int) -> None:
+        """Очищает неактивные чаты конкретного пользователя."""
+        if user_id in self._contexts:
+            inactive_topics = [topic for topic, history in self._contexts[user_id].items() if not history.is_active]
+
+            for topic in inactive_topics:
+                del self._contexts[user_id][topic]
+
+            if not self._contexts[user_id]:
+                del self._contexts[user_id]
 
     def add_message(self, user_id: int, topic: str, role: str, content: str) -> None:
         """Добавляет сообщение в историю чата."""
@@ -96,12 +114,3 @@ class ChatContextManager:
     def _check_chat_exists(self, user_id: int, topic: str) -> bool:
         """Проверяет существование чата."""
         return user_id in self._contexts and topic in self._contexts[user_id]
-
-    def cleanup_inactive_chats(self) -> None:
-        """Очищает неактивные чаты для экономии памяти."""
-        for user_id in list(self._contexts.keys()):
-            for topic in list(self._contexts[user_id].keys()):
-                if not self._contexts[user_id][topic].is_active:
-                    del self._contexts[user_id][topic]
-            if not self._contexts[user_id]:
-                del self._contexts[user_id]

@@ -20,13 +20,55 @@ class InlineKeyboardBuilder:
 
 
 class Keyboard:
-    _buttons: Tuple[Union[Button, List[Button]], ...]
+    """Базовый класс для создания клавиатур."""
+
+    _buttons: Tuple[Union[Button, List[Button]], ...] = ()
+
+    @classmethod
+    def get_buttons(cls) -> Tuple[Union[Button, List[Button]], ...]:
+        """Возвращает кнопки для клавиатуры."""
+        return cls._buttons
 
     def __new__(cls) -> InlineKeyboardMarkup:
         builder = InlineKeyboardBuilder()
-        for btn in cls._buttons:
+
+        buttons = cls.get_buttons()
+
+        for btn in buttons:
             if isinstance(btn, list):
                 builder.add_row_buttons(btn)
             else:
                 builder.add_button(btn)
         return builder.keyboard
+
+
+class DynamicKeyboard(Keyboard):
+    """Базовый класс для клавиатур с динамическими кнопками."""
+
+    _instance = None
+
+    @classmethod
+    def get_buttons(cls) -> Tuple[Union[Button, List[Button]], ...]:
+        """Переопределяется в дочерних классах для генерации динамических кнопок."""
+        return cls._buttons
+
+    @classmethod
+    def reset_instance(cls):
+        """Сбрасывает кэшированный экземпляр клавиатуры."""
+        cls._instance = None
+
+    def __new__(cls) -> InlineKeyboardMarkup:
+        cls._instance = None
+
+        builder = InlineKeyboardBuilder()
+
+        buttons = cls.get_buttons()
+
+        for btn in buttons:
+            if isinstance(btn, list):
+                builder.add_row_buttons(btn)
+            else:
+                builder.add_button(btn)
+
+        cls._instance = builder.keyboard
+        return cls._instance
