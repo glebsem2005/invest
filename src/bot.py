@@ -13,7 +13,7 @@ from models_api import ModelAPI
 from prompts import DEFAULT_PROMPTS_DIR, Models, SystemPrompt, Topics, SystemPrompts
 from chat_context import ChatContextManager
 from file_processor import FileProcessor
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+import aiogram.utils.exceptions
 
 Logger()
 logger = logging.getLogger('bot')
@@ -333,7 +333,6 @@ class AttachFileCallback(BaseScenario):
         user_id = callback_query.from_user.id
         user_data = await state.get_data()
 
-        # Удаляем сообщение с вопросом о файле
         if 'file_message_id' in user_data:
             try:
                 await self.bot.delete_message(chat_id=user_id, message_id=user_data['file_message_id'])
@@ -361,7 +360,7 @@ class AttachFileCallback(BaseScenario):
 
         if not user_query and not file_content:
             await message.answer(
-                'Необходимо ввести запрос или прикрепить файл. Пожалуйста, начните заново с команды /start'
+                'Необходимо ввести запрос или прикрепить файл. Пожалуйста, начните заново с команды /start',
             )
             return
 
@@ -392,6 +391,8 @@ class AttachFileCallback(BaseScenario):
 
             await message.answer('Остались ли у Вас вопросы?', reply_markup=ContinueKeyboard())
             await UserStates.ASKING_CONTINUE.set()
+        except aiogram.utils.exceptions.InvalidQueryID:
+            logger.warning(f'Устаревший callback_query для пользователя {user_id}')
         except Exception as e:
             logger.error(f'Ошибка API {model_name}: {e}', exc_info=True)
             await message.answer(
@@ -583,6 +584,8 @@ class AttachFileContinueCallback(BaseScenario):
 
             await message.answer('Остались ли у Вас вопросы?', reply_markup=ContinueKeyboard())
             await UserStates.ASKING_CONTINUE.set()
+        except aiogram.utils.exceptions.InvalidQueryID:
+            logger.warning(f'Устаревший callback_query для пользователя {user_id}')
         except Exception as e:
             logger.error(f'Ошибка API {model_name}: {e}', exc_info=True)
             await message.answer(
