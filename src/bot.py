@@ -117,33 +117,64 @@ class Access(BaseScenario):
         raise NotImplementedError()
 
     async def authorize_process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
-        user_id = callback_query.from_user.id
-        logger.info(f'Авторизация пользователя {user_id}')
-        msg = 'Доступ получен.'
-        await bot.send_message(chat_id=user_id, text=msg)
-        admin_msg = f'Пользователь {user_id} успешно авторизован.'
-        await callback_query.message.delete()
-        await callback_query.message.reply(admin_msg)
+        admin_id = callback_query.from_user.id
+        logger.info(f'Администратор {admin_id} авторизует пользователя')
+
+        callback_message = callback_query.message.text
+        try:
+            authorized_user_id = int(callback_message.split('id: ')[1].split(')')[0])
+
+            if config._users is None:
+                _ = config.USERS
+
+            config._users.append(authorized_user_id)
+
+            msg = 'Доступ получен. Отправьте /start для начала работы с ботом.'
+            await self.bot.send_message(chat_id=authorized_user_id, text=msg)
+
+            admin_msg = f'Пользователь {authorized_user_id} успешно авторизован.'
+            await callback_query.message.edit_text(admin_msg)
+
+            logger.info(f'Авторизация пользователя {authorized_user_id} завершена успешно')
+        except Exception as e:
+            error_msg = f'Ошибка при авторизации пользователя: {str(e)}'
+            logger.error(error_msg, exc_info=True)
+            await callback_query.message.reply(error_msg)
 
     async def decline_process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
-        user_id = callback_query.from_user.id
-        logger.info(f'Отклонение авторизации пользователя {user_id}')
-        msg = 'Доступ запрещен.'
-        await bot.send_message(chat_id=user_id, text=msg)
-        admin_msg = f'Пользователь {user_id} отклонен.'
-        await callback_query.message.delete()
-        await callback_query.message.reply(admin_msg)
+        admin_id = callback_query.from_user.id
+        logger.info(f'Администратор {admin_id} отклоняет авторизацию пользователя')
+
+        callback_message = callback_query.message.text
+        try:
+            declined_user_id = int(callback_message.split('id: ')[1].split(')')[0])
+            logger.info(f'Извлечен ID пользователя для отклонения: {declined_user_id}')
+
+            config._blocked_users.add(declined_user_id)
+            logger.info(f'Пользователь {declined_user_id} добавлен в список заблокированных')
+
+            msg = 'Доступ запрещен администратором.'
+            await self.bot.send_message(chat_id=declined_user_id, text=msg)
+
+            admin_msg = f'Пользователь {declined_user_id} отклонен и заблокирован.'
+            await callback_query.message.edit_text(admin_msg)
+
+            logger.info(f'Отклонение пользователя {declined_user_id} завершено')
+        except Exception as e:
+            error_msg = f'Ошибка при отклонении пользователя: {str(e)}'
+            logger.error(error_msg, exc_info=True)
+            await callback_query.message.reply(error_msg)
 
     def register(self, dp: Dispatcher) -> None:
         dp.register_callback_query_handler(
             self.authorize_process,
             lambda c: c.data == 'authorize_yes',
-            state=UserStates.ACCESS,
+            state='*',
         )
         dp.register_callback_query_handler(
             self.decline_process,
             lambda c: c.data == 'authorize_no',
-            state=UserStates.ACCESS,
+            state='*',
         )
 
 
@@ -819,9 +850,7 @@ class BotManager:
         self.scenarios[name] = scenario
 
     def _setup_middlewares(self) -> None:
-        # FIXME
-        pass
-        # self.dp.middleware.setup(AccessMiddleware())
+        self.dp.middleware.setup(AccessMiddleware())
 
 
 if __name__ == '__main__':

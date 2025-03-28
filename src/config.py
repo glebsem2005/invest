@@ -15,6 +15,10 @@ class ConfigError(Exception): ...
 
 
 class Config:
+    _users = None
+    _admin_users = None
+    _blocked_users = set()
+    
     @property
     def TOKEN(self) -> str:
         TOKEN = os.getenv('TOKEN')
@@ -31,21 +35,33 @@ class Config:
 
     @property
     def ADMIN_USERS(self) -> List[int]:
+        if self._admin_users is not None:
+            return self._admin_users
+            
         ADMIN_USERS = os.getenv('ADMIN_USERS')
         if ADMIN_USERS:
-            return [int(user.strip()) for user in ADMIN_USERS.strip().split(',')]
+            self._admin_users = [int(user.strip()) for user in ADMIN_USERS.strip().split(',')]
+            return self._admin_users
         raise ConfigError('Please set `ADMIN_USERS` env var.')
 
     @property
     def USERS(self) -> List[int]:
+        if self._users is not None:
+            return self._users
+            
         USERS = os.getenv('USERS')
         if USERS:
-            return [int(user.strip()) for user in USERS.strip().split(',')]
+            self._users = [int(user.strip()) for user in USERS.strip().split(',')]
+            return self._users
         raise ConfigError('Please set `USERS` env var.')
 
     @property
     def AUTHORIZED_USERS_IDS(self) -> Set[int]:
         return set([self.OWNER_ID] + self.ADMIN_USERS + self.USERS)
+
+    @property
+    def BLOCKED_USERS(self) -> Set[int]:
+        return self._blocked_users
 
     @property
     def OPENAI_API_KEY(self) -> str:
