@@ -1,0 +1,53 @@
+target-version = "py311"
+exclude = [
+    "tests/**"
+]
+
+line-length = 119
+indent-width = 4
+
+[lint]
+preview = true
+extend-select = [
+    "E305"
+]
+select = [
+    "E5",
+    "E3",
+    "F8",
+    "F401",
+    "PT",
+    "D",
+    "W5",
+    "PIE",
+    "ANN",
+    "T20",
+    "Q",
+    "COM",
+    "TC",
+    "ARG",
+    "ERA",
+    "A",
+]
+ignore = [
+    "E501",
+    "E265",
+    "F811",
+    "D100",
+    "D101",
+    "D102",
+    "D104",
+    "D105",
+    "D106",
+    "D107",
+]
+fixable = ["ALL"]
+
+[lint.flake8-quotes]
+inline-quotes = "single"
+
+[format]
+quote-style = "single"
+indent-style = "space"
+
+
