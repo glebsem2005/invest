@@ -819,7 +819,9 @@ class BotManager:
         self.scenarios[name] = scenario
 
     def _setup_middlewares(self) -> None:
-        self.dp.middleware.setup(AccessMiddleware())
+        # FIXME
+        pass
+        # self.dp.middleware.setup(AccessMiddleware())
 
 
 if __name__ == '__main__':
