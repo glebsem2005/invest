@@ -13,6 +13,7 @@ from models_api import ModelAPI
 from prompts import DEFAULT_PROMPTS_DIR, Models, SystemPrompt, Topics, SystemPrompts
 from chat_context import ChatContextManager
 from file_processor import FileProcessor
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 Logger()
 logger = logging.getLogger('bot')
@@ -23,8 +24,12 @@ class UserStates(StatesGroup):
     CHOOSING_TOPIC = State()  # Выбор темы анализа
     CHOOSING_MODEL = State()  # Выбор модели
     ENTERING_PROMPT = State()  # Ввод запроса
+    ATTACHING_FILE = State()  # Ожидание прикрепления файла
+    UPLOADING_FILE = State()  # Загрузка файла
     ASKING_CONTINUE = State()  # Спрашиваем, есть ли еще вопросы
     CONTINUE_DIALOG = State()  # Продолжение диалога с той же моделью и темой
+    ATTACHING_FILE_CONTINUE = State()  # Ожидание прикрепления файла при продолжении диалога
+    UPLOADING_FILE_CONTINUE = State()  # Загрузка файла при продолжении диалога
 
 
 class AdminStates(StatesGroup):
@@ -63,6 +68,18 @@ class ModelKeyboard(DynamicKeyboard):
             display_name = model_name.capitalize()
             buttons.append(Button(text=display_name, callback=f'model_{model_name}'))
         return tuple(buttons)
+
+
+class FileAttachKeyboard(DynamicKeyboard):
+    """Клавиатура для выбора прикрепления файла."""
+
+    @classmethod
+    def get_buttons(cls) -> Tuple[Button, ...]:
+        """Возвращает кнопки для выбора прикрепления файла."""
+        return (
+            Button(text='Да, прикрепить файл', callback='attach_file'),
+            Button(text='Нет, продолжить без файла', callback='no_file'),
+        )
 
 
 class ContinueKeyboard(Keyboard):
@@ -260,9 +277,7 @@ class ProcessingChooseModelCallback(BaseScenario):
 
         await state.update_data(chosen_model=selected_model.name, model_display=selected_model.value)
         await callback_query.message.delete()
-        prompt_message = await callback_query.message.answer(
-            'Какой Ваш запрос? Вы также можете прикрепить файл (PDF, Word, PPT).'
-        )
+        prompt_message = await callback_query.message.answer('Введите ваш запрос к ИИ:')
 
         await state.update_data(prompt_message_id=prompt_message.message_id)
         await UserStates.ENTERING_PROMPT.set()
@@ -277,7 +292,7 @@ class ProcessingChooseModelCallback(BaseScenario):
 
 
 class ProcessingEnterPromptHandler(BaseScenario):
-    """Обработка ввода промпта и файлов пользователем."""
+    """Обработка ввода текстового промпта пользователем."""
 
     async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
         user_id = message.from_user.id
@@ -285,7 +300,7 @@ class ProcessingEnterPromptHandler(BaseScenario):
         topic_name = user_data['chosen_topic']
         model_name = user_data['chosen_model']
 
-        logger.info(f'Запрос от {user_id}: модель={model_name}, тема={topic_name}, тип={message.content_type}')
+        logger.info(f'Получен текстовый запрос от {user_id}: модель={model_name}, тема={topic_name}')
 
         if 'prompt_message_id' in user_data:
             try:
@@ -293,23 +308,63 @@ class ProcessingEnterPromptHandler(BaseScenario):
             except Exception as e:
                 logger.error(f'Ошибка удаления сообщения {user_data["prompt_message_id"]}: {e}')
 
-        file_content = ''
-        if message.document:
-            file_name = message.document.file_name
-            file_size = message.document.file_size
-            logger.info(f'Обработка файла: {file_name} ({file_size} байт)')
-            try:
-                file_content = await FileProcessor.extract_text_from_file(message.document, self.bot)
-                logger.info(f'Извлечено {len(file_content)} символов из файла {file_name}')
-            except ValueError as e:
-                logger.error(f'Ошибка обработки файла {file_name}: {e}')
-                await message.answer(
-                    f'Произошла ошибка при обработке файла.\nСообщение об ошибке уже отправлено разработчику.',
-                )
-                await self.bot.send_message(chat_id=config.OWNER_ID, message=f'Ошибка при обработке файла: {e}')
-                return
+        await state.update_data(user_query=message.text)
 
-        user_query = message.text
+        file_message = await message.answer(
+            'Хотите ли вы прикрепить файл (PDF, Word, PPT) для анализа?',
+            reply_markup=FileAttachKeyboard(),
+        )
+
+        await state.update_data(file_message_id=file_message.message_id)
+        await UserStates.ATTACHING_FILE.set()
+
+    def register(self, dp: Dispatcher) -> None:
+        dp.register_message_handler(
+            self.process,
+            content_types=['text'],
+            state=UserStates.ENTERING_PROMPT,
+        )
+
+
+class AttachFileCallback(BaseScenario):
+    """Обработка выбора прикрепления файла."""
+
+    async def process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
+        user_id = callback_query.from_user.id
+        user_data = await state.get_data()
+
+        # Удаляем сообщение с вопросом о файле
+        if 'file_message_id' in user_data:
+            try:
+                await self.bot.delete_message(chat_id=user_id, message_id=user_data['file_message_id'])
+            except Exception as e:
+                logger.error(f'Ошибка удаления сообщения {user_data["file_message_id"]}: {e}')
+
+        if callback_query.data == 'attach_file':
+            logger.info(f'Пользователь {user_id} решил прикрепить файл')
+            file_prompt = await callback_query.message.answer('Пожалуйста, загрузите файл (PDF, Word, PPT):')
+            await state.update_data(file_prompt_id=file_prompt.message_id)
+            await UserStates.UPLOADING_FILE.set()
+        else:
+            logger.info(f'Пользователь {user_id} решил продолжить без файла')
+            await self.process_query_with_file(callback_query.message, state, file_content='')
+
+        await callback_query.answer()
+
+    async def process_query_with_file(self, message, state, file_content=''):
+        """Обрабатывает запрос с файлом или без него."""
+        user_id = message.chat.id
+        user_data = await state.get_data()
+        topic_name = user_data['chosen_topic']
+        model_name = user_data['chosen_model']
+        user_query = user_data.get('user_query', '')
+
+        if not user_query and not file_content:
+            await message.answer(
+                'Необходимо ввести запрос или прикрепить файл. Пожалуйста, начните заново с команды /start'
+            )
+            return
+
         full_query = f'{user_query}\n\nКонтекст из файла:\n{file_content}' if file_content else user_query
 
         chat_context = ChatContextManager()
@@ -348,42 +403,76 @@ class ProcessingEnterPromptHandler(BaseScenario):
             )
 
     def register(self, dp: Dispatcher) -> None:
+        dp.register_callback_query_handler(
+            self.process,
+            lambda c: c.data in ['attach_file', 'no_file'],
+            state=UserStates.ATTACHING_FILE,
+        )
+
+
+class UploadFileHandler(BaseScenario):
+    """Обработка загрузки файла."""
+
+    async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
+        user_id = message.from_user.id
+        user_data = await state.get_data()
+
+        if 'file_prompt_id' in user_data:
+            try:
+                await self.bot.delete_message(chat_id=user_id, message_id=user_data['file_prompt_id'])
+            except Exception as e:
+                logger.error(f'Ошибка удаления сообщения {user_data["file_prompt_id"]}: {e}')
+
+        if not message.document:
+            await message.answer('Пожалуйста, загрузите файл в формате PDF, Word или PowerPoint.')
+            return
+
+        file_name = message.document.file_name
+        file_size = message.document.file_size
+        logger.info(f'Обработка файла: {file_name} ({file_size} байт)')
+
+        try:
+            file_content = await FileProcessor.extract_text_from_file(message.document, self.bot)
+            logger.info(f'Извлечено {len(file_content)} символов из файла {file_name}')
+
+            attach_file_handler = AttachFileCallback(self.bot)
+            await attach_file_handler.process_query_with_file(message, state, file_content)
+
+        except ValueError as e:
+            logger.error(f'Ошибка обработки файла {file_name}: {e}')
+            await message.answer(
+                f'Произошла ошибка при обработке файла.\nСообщение об ошибке уже отправлено разработчику.\nПродолжите использование нажав команду /start',
+            )
+            await self.bot.send_message(
+                chat_id=config.OWNER_ID,
+                text=f'Ошибка при обработке файла: {e}',
+            )
+
+    def register(self, dp: Dispatcher) -> None:
         dp.register_message_handler(
             self.process,
-            content_types=['text', 'document'],
-            state=UserStates.ENTERING_PROMPT,
+            content_types=['document'],
+            state=UserStates.UPLOADING_FILE,
         )
 
 
 class ProcessingContinueCallback(BaseScenario):
-    """Обработка ответа на вопрос о продолжении диалога."""
+    """Обработка выбора продолжения диалога."""
 
     async def process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
         user_id = callback_query.from_user.id
-        user_data = await state.get_data()
-        topic_name = user_data['chosen_topic']
-        continue_dialog = callback_query.data == 'continue_yes'
+        continue_callback = callback_query.data
 
-        logger.info(
-            f'Пользователь {user_id} решил {"продолжить" if continue_dialog else "завершить"} диалог по теме {topic_name}',
-        )
-
-        chat_context = ChatContextManager()
-        await callback_query.message.delete()
-
-        if continue_dialog:
-            prompt_message = await callback_query.message.answer(
-                'Введите ваш следующий вопрос или загрузите новый документ (PDF, Word, PPT):',
-            )
+        if continue_callback == 'continue_yes':
+            logger.info(f'Пользователь {user_id} решил продолжить диалог')
+            await callback_query.message.delete()
+            prompt_message = await callback_query.message.answer('Введите ваш следующий вопрос:')
             await state.update_data(prompt_message_id=prompt_message.message_id)
-            await UserStates.ENTERING_PROMPT.set()
+            await UserStates.CONTINUE_DIALOG.set()
         else:
-            chat_context.end_chat(user_id, topic_name)
-            chat_context.cleanup_user_context(user_id)
-            logger.info(f'Очищен контекст чата для пользователя {user_id}')
-
-            await state.finish()
-            await callback_query.message.answer('Чем я могу вам помочь?', reply_markup=TopicKeyboard())
+            logger.info(f'Пользователь {user_id} решил начать новый диалог')
+            await callback_query.message.delete()
+            await callback_query.message.answer('Выберите тему для анализа:', reply_markup=TopicKeyboard())
             await UserStates.CHOOSING_TOPIC.set()
 
         await callback_query.answer()
@@ -415,27 +504,58 @@ class ContinueDialogHandler(BaseScenario):
             except Exception as e:
                 logger.error(f'Ошибка удаления сообщения {user_data["prompt_message_id"]}: {e}')
 
-        file_content = ''
-        if message.document:
-            file_name = message.document.file_name
-            file_size = message.document.file_size
-            logger.info(f'Обработка файла: {file_name} ({file_size} байт)')
+        await state.update_data(user_query=message.text)
+
+        file_message = await message.answer(
+            'Хотите ли вы прикрепить файл (PDF, Word, PPT) для анализа?',
+            reply_markup=FileAttachKeyboard(),
+        )
+
+        await state.update_data(file_message_id=file_message.message_id)
+        await UserStates.ATTACHING_FILE_CONTINUE.set()
+
+    def register(self, dp: Dispatcher) -> None:
+        dp.register_message_handler(self.process, content_types=['text'], state=UserStates.CONTINUE_DIALOG)
+
+
+class AttachFileContinueCallback(BaseScenario):
+    """Обработка выбора прикрепления файла при продолжении диалога."""
+
+    async def process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
+        user_id = callback_query.from_user.id
+        user_data = await state.get_data()
+
+        if 'file_message_id' in user_data:
             try:
-                file_content = await FileProcessor.extract_text_from_file(message.document, self.bot)
-                logger.info(f'Извлечено {len(file_content)} символов из файла {file_name}')
-            except ValueError as e:
-                logger.error(f'Ошибка обработки файла {file_name}: {e}')
+                await self.bot.delete_message(chat_id=user_id, message_id=user_data['file_message_id'])
+            except Exception as e:
+                logger.error(f'Ошибка удаления сообщения {user_data["file_message_id"]}: {e}')
 
-                await message.answer(
-                    f'Произошла ошибка при обработке файла.\nСообщение об ошибке уже отправлено разработчику.',
-                )
-                await self.bot.send_message(
-                    chat_id=config.OWNER_ID,
-                    text=f'Ошибка при обработке файла: {e}',
-                )
-                return
+        if callback_query.data == 'attach_file':
+            logger.info(f'Пользователь {user_id} решил прикрепить файл при продолжении диалога')
+            file_prompt = await callback_query.message.answer('Пожалуйста, загрузите файл (PDF, Word, PPT):')
+            await state.update_data(file_prompt_id=file_prompt.message_id)
+            await UserStates.UPLOADING_FILE_CONTINUE.set()
+        else:
+            logger.info(f'Пользователь {user_id} решил продолжить без файла')
+            await self.process_query_with_file(callback_query.message, state, file_content='')
 
-        user_query = message.text
+        await callback_query.answer()
+
+    async def process_query_with_file(self, message, state, file_content=''):
+        """Обрабатывает запрос с файлом или без него."""
+        user_id = message.chat.id
+        user_data = await state.get_data()
+        topic_name = user_data['chosen_topic']
+        model_name = user_data['chosen_model']
+        user_query = user_data.get('user_query', '')
+
+        if not user_query and not file_content:
+            await message.answer(
+                'Необходимо ввести запрос или прикрепить файл. Пожалуйста, начните заново с команды /start'
+            )
+            return
+
         full_query = f'{user_query}\n\nКонтекст из файла:\n{file_content}' if file_content else user_query
 
         chat_context = ChatContextManager()
@@ -474,7 +594,57 @@ class ContinueDialogHandler(BaseScenario):
             )
 
     def register(self, dp: Dispatcher) -> None:
-        dp.register_message_handler(self.process, content_types=['text', 'document'], state=UserStates.CONTINUE_DIALOG)
+        dp.register_callback_query_handler(
+            self.process,
+            lambda c: c.data in ['attach_file', 'no_file'],
+            state=UserStates.ATTACHING_FILE_CONTINUE,
+        )
+
+
+class UploadFileContinueHandler(BaseScenario):
+    """Обработка загрузки файла при продолжении диалога."""
+
+    async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
+        user_id = message.from_user.id
+        user_data = await state.get_data()
+
+        if 'file_prompt_id' in user_data:
+            try:
+                await self.bot.delete_message(chat_id=user_id, message_id=user_data['file_prompt_id'])
+            except Exception as e:
+                logger.error(f'Ошибка удаления сообщения {user_data["file_prompt_id"]}: {e}')
+
+        if not message.document:
+            await message.answer('Пожалуйста, загрузите файл в формате PDF, Word или PowerPoint.')
+            return
+
+        file_name = message.document.file_name
+        file_size = message.document.file_size
+        logger.info(f'Обработка файла: {file_name} ({file_size} байт)')
+
+        try:
+            file_content = await FileProcessor.extract_text_from_file(message.document, self.bot)
+            logger.info(f'Извлечено {len(file_content)} символов из файла {file_name}')
+
+            attach_file_handler = AttachFileContinueCallback(self.bot)
+            await attach_file_handler.process_query_with_file(message, state, file_content)
+
+        except ValueError as e:
+            logger.error(f'Ошибка обработки файла {file_name}: {e}')
+            await message.answer(
+                f'Произошла ошибка при обработке файла.\nСообщение об ошибке уже отправлено разработчику.\nПродолжите использование нажав команду /start',
+            )
+            await self.bot.send_message(
+                chat_id=config.OWNER_ID,
+                text=f'Ошибка при обработке файла: {e}',
+            )
+
+    def register(self, dp: Dispatcher) -> None:
+        dp.register_message_handler(
+            self.process,
+            content_types=['document'],
+            state=UserStates.UPLOADING_FILE_CONTINUE,
+        )
 
 
 class AdminUpdatePromptsHandler(BaseScenario):
@@ -568,7 +738,8 @@ class AdminUploadPromptHandler(BaseScenario):
         except Exception as e:
             logger.error(f'Ошибка при обновлении промпта: {e}', exc_info=True)
             await message.answer(
-                f'Произошла ошибка при обновлении промпта.\nСообщение об ошибке уже отправлено разработчику.',
+                f'Произошла ошибка при обновлении промпта.\nСообщение об ошибке уже отправлено разработчику.\n'
+                'Продолжите использование нажав команду /start',
             )
             await self.bot.send_message(
                 chat_id=config.OWNER_ID,
@@ -730,7 +901,8 @@ class AdminNewPromptUploadHandler(BaseScenario):
         except Exception as e:
             logger.error(f'Ошибка при добавлении системного промпта: {e}', exc_info=True)
             await message.answer(
-                f'Произошла ошибка при добавлении системного промпта.\nСообщение об ошибке уже отправлено разработчику.',
+                f'Произошла ошибка при добавлении системного промпта.\nСообщение об ошибке уже отправлено разработчику.\n'
+                'Продолжите использование нажав команду /start',
             )
             await self.bot.send_message(
                 chat_id=config.OWNER_ID,
@@ -830,8 +1002,12 @@ class BotManager:
         'choose_topic': ProcessingChooseTopicCallback,
         'choose_model': ProcessingChooseModelCallback,
         'enter_prompt': ProcessingEnterPromptHandler,
+        'attach_file': AttachFileCallback,
+        'upload_file': UploadFileHandler,
         'continue_dialog': ContinueDialogHandler,
         'continue_callback': ProcessingContinueCallback,
+        'attach_file_continue': AttachFileContinueCallback,
+        'upload_file_continue': UploadFileContinueHandler,
     }
 
     admins_update_system_prompts_scenario = {
