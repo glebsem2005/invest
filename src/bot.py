@@ -330,7 +330,11 @@ class ProcessingEnterPromptHandler(BaseScenario):
             chat_context.add_message(user_id, topic_name, 'assistant', response)
             escaped_response = self._escape_markdown(response)
 
-            await message.answer(escaped_response, parse_mode='MarkdownV2')
+            max_length = 4000
+            for i in range(0, len(escaped_response), max_length):
+                part = escaped_response[i : i + max_length]
+                await message.answer(part, parse_mode='MarkdownV2')
+
             await message.answer('Остались ли у Вас вопросы?', reply_markup=ContinueKeyboard())
             await UserStates.ASKING_CONTINUE.set()
         except Exception as e:
@@ -452,7 +456,11 @@ class ContinueDialogHandler(BaseScenario):
             chat_context.add_message(user_id, topic_name, 'assistant', response)
             escaped_response = self._escape_markdown(response)
 
-            await message.answer(escaped_response, parse_mode='MarkdownV2')
+            max_length = 4000
+            for i in range(0, len(escaped_response), max_length):
+                part = escaped_response[i : i + max_length]
+                await message.answer(part, parse_mode='MarkdownV2')
+
             await message.answer('Остались ли у Вас вопросы?', reply_markup=ContinueKeyboard())
             await UserStates.ASKING_CONTINUE.set()
         except Exception as e:
