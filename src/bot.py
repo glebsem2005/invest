@@ -54,7 +54,15 @@ class TopicKeyboard(DynamicKeyboard):
 class ModelKeyboard(DynamicKeyboard):
     """Клавиатура для выбора модели."""
 
-    _buttons = (Button(model.name, f'model_{model.name}') for model in Models)
+    @classmethod
+    def get_buttons(cls) -> Tuple[Button, ...]:
+        """Генерирует кнопки на основе доступных моделей."""
+        buttons = []
+        for model in Models:
+            model_name = model.name
+            display_name = model_name.capitalize()
+            buttons.append(Button(text=display_name, callback=f'model_{model_name}'))
+        return tuple(buttons)
 
 
 class ContinueKeyboard(Keyboard):
@@ -164,6 +172,7 @@ class Access(BaseScenario):
             error_msg = f'Ошибка при отклонении пользователя: {str(e)}'
             logger.error(error_msg, exc_info=True)
             await callback_query.message.reply(error_msg)
+            self.bot.send_message(chat_id=config.OWNER_ID, text=error_msg)
 
     def register(self, dp: Dispatcher) -> None:
         dp.register_callback_query_handler(
@@ -294,7 +303,10 @@ class ProcessingEnterPromptHandler(BaseScenario):
                 logger.info(f'Извлечено {len(file_content)} символов из файла {file_name}')
             except ValueError as e:
                 logger.error(f'Ошибка обработки файла {file_name}: {e}')
-                await message.answer(f'Ошибка при обработке файла: {e}')
+                await message.answer(
+                    f'Произошла ошибка при обработке файла.\nСообщение об ошибке уже отправлено разработчику.',
+                )
+                await self.bot.send_message(chat_id=config.OWNER_ID, message=f'Ошибка при обработке файла: {e}')
                 return
 
         user_query = message.text
@@ -409,7 +421,14 @@ class ContinueDialogHandler(BaseScenario):
                 logger.info(f'Извлечено {len(file_content)} символов из файла {file_name}')
             except ValueError as e:
                 logger.error(f'Ошибка обработки файла {file_name}: {e}')
-                await message.answer(f'Ошибка при обработке файла: {e}')
+
+                await message.answer(
+                    f'Произошла ошибка при обработке файла.\nСообщение об ошибке уже отправлено разработчику.',
+                )
+                await self.bot.send_message(
+                    chat_id=config.OWNER_ID,
+                    text=f'Ошибка при обработке файла: {e}',
+                )
                 return
 
         user_query = message.text
@@ -540,7 +559,13 @@ class AdminUploadPromptHandler(BaseScenario):
             await message.answer(f"Ошибка: тема '{topic_name}' не найдена.")
         except Exception as e:
             logger.error(f'Ошибка при обновлении промпта: {e}', exc_info=True)
-            await message.answer(f'Произошла ошибка при обновлении промпта: {e}')
+            await message.answer(
+                f'Произошла ошибка при обновлении промпта.\nСообщение об ошибке уже отправлено разработчику.',
+            )
+            await self.bot.send_message(
+                chat_id=config.OWNER_ID,
+                text=f'Произошла ошибка при обновлении промпта: {e}',
+            )
 
         await state.finish()
         await message.answer('Чем я могу вам помочь?', reply_markup=TopicKeyboard())
