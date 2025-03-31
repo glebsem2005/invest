@@ -127,11 +127,6 @@ class FileProcessor:
 
         try:
             text = await extractor.extract_text(downloaded_file)
-
-            max_length = 4000
-            if len(text) > max_length:
-                text = text[:max_length] + '...\n[Текст был обрезан из-за большого размера]'
-
             return text
         except Exception as e:
             logger.error(f'Ошибка при обработке файла {file_name}: {e}')
@@ -141,4 +136,3 @@ class FileProcessor:
     def register_extractor(cls, extension: str, extractor: Type[FileExtractor]) -> None:
         """Регистрирует новый экстрактор для указанного расширения файла."""
         cls._extractors[extension.lower()] = extractor
-

@@ -358,6 +358,13 @@ class AttachFileCallback(BaseScenario):
         model_name = user_data['chosen_model']
         user_query = user_data.get('user_query', '')
 
+        if 'processing_msg_id' in user_data:
+            try:
+                await self.bot.delete_message(chat_id=user_id, message_id=user_data['processing_msg_id'])
+                logger.debug(f'Удалено сообщение об обработке файла {user_data["processing_msg_id"]}')
+            except Exception as e:
+                logger.error(f'Ошибка удаления сообщения об обработке файла {user_data["processing_msg_id"]}: {e}')
+
         if not user_query and not file_content:
             await message.answer(
                 'Необходимо ввести запрос или прикрепить файл. Пожалуйста, начните заново с команды /start',
@@ -433,8 +440,11 @@ class UploadFileHandler(BaseScenario):
         logger.info(f'Обработка файла: {file_name} ({file_size} байт)')
 
         try:
+            processing_msg = await message.answer('Идет обработка файла...')
             file_content = await FileProcessor.extract_text_from_file(message.document, self.bot)
             logger.info(f'Извлечено {len(file_content)} символов из файла {file_name}')
+
+            await state.update_data(processing_msg_id=processing_msg.message_id)
 
             attach_file_handler = AttachFileCallback(self.bot)
             await attach_file_handler.process_query_with_file(message, state, file_content)
@@ -446,7 +456,7 @@ class UploadFileHandler(BaseScenario):
             )
             await self.bot.send_message(
                 chat_id=config.OWNER_ID,
-                text=f'Ошибка при обработке файла: {e}',
+                text=f'{e}',
             )
 
     def register(self, dp: Dispatcher) -> None:
@@ -551,6 +561,13 @@ class AttachFileContinueCallback(BaseScenario):
         model_name = user_data['chosen_model']
         user_query = user_data.get('user_query', '')
 
+        if 'processing_msg_id' in user_data:
+            try:
+                await self.bot.delete_message(chat_id=user_id, message_id=user_data['processing_msg_id'])
+                logger.debug(f'Удалено сообщение об обработке файла {user_data["processing_msg_id"]}')
+            except Exception as e:
+                logger.error(f'Ошибка удаления сообщения об обработке файла {user_data["processing_msg_id"]}: {e}')
+
         if not user_query and not file_content:
             await message.answer(
                 'Необходимо ввести запрос или прикрепить файл. Пожалуйста, начните заново с команды /start'
@@ -626,8 +643,11 @@ class UploadFileContinueHandler(BaseScenario):
         logger.info(f'Обработка файла: {file_name} ({file_size} байт)')
 
         try:
+            processing_msg = await message.answer('Идет обработка файла...')
             file_content = await FileProcessor.extract_text_from_file(message.document, self.bot)
             logger.info(f'Извлечено {len(file_content)} символов из файла {file_name}')
+
+            await state.update_data(processing_msg_id=processing_msg.message_id)
 
             attach_file_handler = AttachFileContinueCallback(self.bot)
             await attach_file_handler.process_query_with_file(message, state, file_content)
