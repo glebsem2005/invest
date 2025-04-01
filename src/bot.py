@@ -1016,6 +1016,24 @@ class AdminHelpHandler(BaseScenario):
         dp.register_message_handler(self.process, commands=['help'], state='*')
 
 
+class ResetStateHandler(BaseScenario):
+    """Обработка команды /reset для сброса состояния пользователя."""
+
+    async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
+        user_id = message.from_user.id
+        logger.info(f'Пользователь {user_id} запросил сброс состояния')
+        
+        await state.finish()
+        
+        await message.answer('Состояние сброшено. Выберите тему для анализа:', reply_markup=TopicKeyboard())
+        await UserStates.CHOOSING_TOPIC.set()
+        
+        logger.info(f'Состояние пользователя {user_id} успешно сброшено')
+
+    def register(self, dp: Dispatcher) -> None:
+        dp.register_message_handler(self.process, commands=['reset'], state='*')
+
+
 class BotManager:
     scenarios: Dict[str, BaseScenario] = {}
 
@@ -1031,6 +1049,7 @@ class BotManager:
         'continue_callback': ProcessingContinueCallback,
         'attach_file_continue': AttachFileContinueCallback,
         'upload_file_continue': UploadFileContinueHandler,
+        'reset_state': ResetStateHandler,
     }
 
     admins_update_system_prompts_scenario = {

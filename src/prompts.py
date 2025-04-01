@@ -4,7 +4,7 @@ import logging
 
 from models_api import ChatGPTStrategy, DeepseekStrategy, GigaChatStrategy, PerplexityStrategy
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('bot')
 
 BASE_DIR = Path(__file__).parent.absolute()
 DEFAULT_PROMPTS_DIR = BASE_DIR / 'default_prompts'

@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from aiogram import Bot
 from aiogram.types import Document
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('bot')
 
 
 class FileExtractor(ABC):
