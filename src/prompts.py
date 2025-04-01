@@ -41,11 +41,24 @@ class SystemPrompt(DynamicEnum):
 
 class SystemPrompts:
     """Класс для работы с системными промптами. Получение, обновление промптов."""
+    
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            logger.info(f'Создание экземпляра SystemPrompts')
+            cls._instance = super(SystemPrompts, cls).__new__(cls)
+            cls._instance.prompts = {}
+            cls._instance._initialized = False
+        return cls._instance
 
     def __init__(self) -> None:
-        self.prompts = {}
-        logger.info(f'Инициализация SystemPrompts, директория промптов: {DEFAULT_PROMPTS_DIR}')
-        self._load_default_prompts()
+        if not self._initialized:
+            logger.info(f'Инициализация SystemPrompts, директория промптов: {DEFAULT_PROMPTS_DIR}')
+            self._load_default_prompts()
+            self._initialized = True
+        else:
+            logger.debug('Повторная инициализация SystemPrompts пропущена')
 
     def _load_default_prompts(self) -> None:
         logger.info(f'Загрузка дефолтных промптов из {DEFAULT_PROMPTS_DIR}')
