@@ -2,13 +2,14 @@ from abc import ABC, abstractmethod
 from typing import Dict, List
 import logging
 from openai import AsyncOpenAI
+from openai.types.chat.completion_create_params import WebSearchOptions
 from config import Config
 from gigachat import GigaChat
 from gigachat.models import Chat, Messages, MessagesRole
 import httpx
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('bot')
 config = Config()
 
 
@@ -29,7 +30,6 @@ class ChatGPTStrategy(ModelStrategy):
         self.client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
         self.model = config.OPENAI_MODEL
         self.max_tokens = int(config.OPENAI_MAX_TOKENS)
-        self.temperature = float(config.OPENAI_TEMPERATURE)
         logger.info(f'Инициализирована стратегия {self.__class__.__name__} с моделью {self.model}')
 
     async def get_response(self, messages: List[Dict[str, str]]) -> str:
@@ -42,7 +42,7 @@ class ChatGPTStrategy(ModelStrategy):
                 model=self.model,
                 messages=messages,
                 max_tokens=self.max_tokens,
-                temperature=self.temperature,
+                web_search_options=WebSearchOptions(search_context_size='high'),
             )
 
             content = response.choices[0].message.content.strip()

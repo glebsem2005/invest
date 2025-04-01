@@ -18,7 +18,7 @@ class Config:
     _users = None
     _admin_users = None
     _blocked_users = set()
-    
+
     @property
     def TOKEN(self) -> str:
         TOKEN = os.getenv('TOKEN')
@@ -37,7 +37,7 @@ class Config:
     def ADMIN_USERS(self) -> List[int]:
         if self._admin_users is not None:
             return self._admin_users
-            
+
         ADMIN_USERS = os.getenv('ADMIN_USERS')
         if ADMIN_USERS:
             self._admin_users = [int(user.strip()) for user in ADMIN_USERS.strip().split(',')]
@@ -48,7 +48,7 @@ class Config:
     def USERS(self) -> List[int]:
         if self._users is not None:
             return self._users
-            
+
         USERS = os.getenv('USERS')
         if USERS:
             self._users = [int(user.strip()) for user in USERS.strip().split(',')]
@@ -72,7 +72,6 @@ class Config:
 
     OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-2024-08-06')
     OPENAI_MAX_TOKENS = os.getenv('OPENAI_MAX_TOKENS', 2000)
-    OPENAI_TEMPERATURE = os.getenv('OPENAI_TEMPERATURE', 0.7)
 
     @property
     def GIGACHAT_API_KEY(self) -> str:
