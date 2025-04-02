@@ -326,6 +326,8 @@ class AttachFileCallback(BaseScenario):
         model_name = user_data['chosen_model']
         user_query = user_data.get('user_query', '')
 
+        was_file_model = user_data.get('was_file_model', False)
+
         if 'processing_msg_id' in user_data:
             try:
                 await self.bot.delete_message(chat_id=user_id, message_id=user_data['processing_msg_id'])
@@ -343,8 +345,20 @@ class AttachFileCallback(BaseScenario):
 
         chat_context = ChatContextManager()
         chat_context.add_message(user_id, topic_name, 'user', full_query)
-        messages = chat_context.get_messages_for_api(user_id, topic_name)
-        logger.info(f'Подготовлено {len(messages)} сообщений для API, размер запроса: {len(full_query)} символов')
+
+        if model_name == 'chatgpt' and (not file_content or was_file_model):
+            messages = chat_context.get_limited_messages_for_api(user_id, topic_name)
+            logger.info(
+                f'Подготовлено {len(messages)} ограниченных сообщений для API, чтобы избежать превышения лимита токенов'
+            )
+        else:
+            messages = chat_context.get_messages_for_api(user_id, topic_name)
+            logger.info(f'Подготовлено {len(messages)} сообщений для API, размер запроса: {len(full_query)} символов')
+
+        if file_content and model_name == 'chatgpt':
+            logger.info(f'Обнаружен файл, переключение на модель chatgpt_file вместо {model_name}')
+            model_name = 'chatgpt_file'
+            await state.update_data(was_file_model=True)
 
         strategy = Models[model_name].value()
         model_api = ModelAPI(strategy)
@@ -458,13 +472,21 @@ class ProcessingContinueCallback(BaseScenario):
             topic_name = user_data.get('chosen_topic')
             model_name = user_data.get('chosen_model')
 
-            if topic_name == 'startups':
+            if topic_name in ['startups', 'investment']:
                 system_prompts = SystemPrompts()
-                system_prompt = system_prompts.get_prompt(SystemPrompt.STARTUPS_DETAIL)
+                if topic_name == 'startups':
+                    system_prompt = system_prompts.get_prompt(SystemPrompt.STARTUPS_DETAIL)
+                elif topic_name == 'investment':
+                    system_prompt = system_prompts.get_prompt(SystemPrompt.INVESTMENT_DETAIL)
 
                 chat_context = ChatContextManager()
 
                 messages = chat_context.get_messages_for_api(user_id, topic_name)
+
+                if model_name == 'chatgpt':
+                    logger.info(f'Запрос деталей, переключение на модель chatgpt_file вместо {model_name}')
+                    model_name = 'chatgpt_file'
+                    await state.update_data(was_file_model=True)
 
                 strategy = Models[model_name].value()
                 model_api = ModelAPI(strategy)
@@ -473,9 +495,11 @@ class ProcessingContinueCallback(BaseScenario):
                 logger.info(f'Отправка запроса на детальный анализ к {model_name} для пользователя {user_id}')
 
                 new_messages = [{'role': 'system', 'content': system_prompt}]
-                for msg in messages:
-                    if msg['role'] != 'system':
-                        new_messages.append(msg)
+                user_messages = [msg for msg in messages if msg['role'] == 'user']
+                if user_messages:
+                    new_messages.append(user_messages[-1])
+
+                logger.info(f'Запрос деталей с минимальным контекстом: {len(new_messages)} сообщений')
 
                 response = await model_api.get_response(new_messages)
                 logger.info(f'Получен детальный ответ от {model_name}, длина: {len(response)} символов')
@@ -488,7 +512,9 @@ class ProcessingContinueCallback(BaseScenario):
                     part = escaped_response[i : i + max_length]
                     await self.bot.send_message(chat_id=user_id, text=part, parse_mode='MarkdownV2')
 
-                await self.bot.send_message(chat_id=user_id, text='Остались ли у Вас вопросы?', reply_markup=ContinueKeyboard())
+                await self.bot.send_message(
+                    chat_id=user_id, text='Остались ли у Вас вопросы?', reply_markup=ContinueKeyboard()
+                )
                 await UserStates.ASKING_CONTINUE.set()
             else:
                 await self.bot.send_message(
@@ -500,7 +526,9 @@ class ProcessingContinueCallback(BaseScenario):
         else:
             logger.info(f'Пользователь {user_id} решил начать новый диалог')
             await callback_query.message.delete()
-            await self.bot.send_message(chat_id=user_id, text='Выберите тему для анализа:', reply_markup=TopicKeyboard())
+            await self.bot.send_message(
+                chat_id=user_id, text='Выберите тему для анализа:', reply_markup=TopicKeyboard()
+            )
             await UserStates.CHOOSING_TOPIC.set()
 
     def register(self, dp: Dispatcher) -> None:
@@ -576,6 +604,8 @@ class AttachFileContinueCallback(BaseScenario):
         model_name = user_data['chosen_model']
         user_query = user_data.get('user_query', '')
 
+        was_file_model = user_data.get('was_file_model', False)
+
         if 'processing_msg_id' in user_data:
             try:
                 await self.bot.delete_message(chat_id=user_id, message_id=user_data['processing_msg_id'])
@@ -593,8 +623,20 @@ class AttachFileContinueCallback(BaseScenario):
 
         chat_context = ChatContextManager()
         chat_context.add_message(user_id, topic_name, 'user', full_query)
-        messages = chat_context.get_messages_for_api(user_id, topic_name)
-        logger.info(f'Подготовлено {len(messages)} сообщений для API, размер запроса: {len(full_query)} символов')
+
+        if model_name == 'chatgpt' and (not file_content or was_file_model):
+            messages = chat_context.get_limited_messages_for_api(user_id, topic_name)
+            logger.info(
+                f'Подготовлено {len(messages)} ограниченных сообщений для API, чтобы избежать превышения лимита токенов'
+            )
+        else:
+            messages = chat_context.get_messages_for_api(user_id, topic_name)
+            logger.info(f'Подготовлено {len(messages)} сообщений для API, размер запроса: {len(full_query)} символов')
+
+        if file_content and model_name == 'chatgpt':
+            logger.info(f'Обнаружен файл, переключение на модель chatgpt_file вместо {model_name}')
+            model_name = 'chatgpt_file'
+            await state.update_data(was_file_model=True)
 
         strategy = Models[model_name].value()
         model_api = ModelAPI(strategy)

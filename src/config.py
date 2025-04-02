@@ -72,42 +72,4 @@ class Config:
 
     OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-2024-08-06')
     OPENAI_MAX_TOKENS = os.getenv('OPENAI_MAX_TOKENS', 2000)
-
-    @property
-    def GIGACHAT_API_KEY(self) -> str:
-        GIGACHAT_API_KEY = os.getenv('GIGACHAT_API_KEY')
-        if GIGACHAT_API_KEY:
-            return str(GIGACHAT_API_KEY)
-        raise ConfigError('Please set `GIGACHAT_API_KEY` env var.')
-
-    GIGACHAT_VERIFY_SSL = os.getenv('GIGACHAT_VERIFY_SSL', 'True').lower() == 'true'
-    GIGACHAT_SCOPE = os.getenv('GIGACHAT_SCOPE', 'GIGACHAT_API_PERS')
-    GIGACHAT_MODEL = os.getenv('GIGACHAT_MODEL', 'GigaChat')
-    GIGACHAT_MAX_TOKENS = os.getenv('GIGACHAT_MAX_TOKENS', 2000)
-    GIGACHAT_TEMPERATURE = os.getenv('GIGACHAT_TEMPERATURE', 0.7)
-
-    @property
-    def PERPLEXITY_API_KEY(self) -> str:
-        PERPLEXITY_API_KEY = os.getenv('PERPLEXITY_API_KEY')
-        if PERPLEXITY_API_KEY:
-            return str(PERPLEXITY_API_KEY)
-        raise ConfigError('Please set `PERPLEXITY_API_KEY` env var.')
-
-    PERPLEXITY_MODEL = os.getenv('PERPLEXITY_MODEL', 'sonar')
-    PERPLEXITY_MAX_TOKENS = os.getenv('PERPLEXITY_MAX_TOKENS', 1000)
-    PERPLEXITY_TEMPERATURE = os.getenv('PERPLEXITY_TEMPERATURE', 0.2)
-    PERPLEXITY_TOP_P = os.getenv('PERPLEXITY_TOP_P', 0.9)
-    PERPLEXITY_SEARCH_CONTEXT_SIZE = os.getenv('PERPLEXITY_SEARCH_CONTEXT_SIZE', 'high')
-    PERPLEXITY_FREQUENCY_PENALTY = os.getenv('PERPLEXITY_FREQUENCY_PENALTY', 1)
-    PERPLEXITY_PRESENCE_PENALTY = os.getenv('PERPLEXITY_PRESENCE_PENALTY', 0)
-
-    @property
-    def DEEPSEEK_API_KEY(self) -> str:
-        DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
-        if DEEPSEEK_API_KEY:
-            return str(DEEPSEEK_API_KEY)
-        raise ConfigError('Please set `DEEPSEEK_API_KEY` env var.')
-
-    DEEPSEEK_MODEL = os.getenv('DEEPSEEK_MODEL', 'deepseek-chat')
-    DEEPSEEK_MAX_TOKENS = os.getenv('DEEPSEEK_MAX_TOKENS', 2000)
-    DEEPSEEK_TEMPERATURE = os.getenv('DEEPSEEK_TEMPERATURE', 0.7)
+    OPENAI_FILE_MODEL = os.getenv('OPENAI_FILE_MODEL', 'gpt-4o')

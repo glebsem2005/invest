@@ -2,7 +2,7 @@ from enum import Enum
 from pathlib import Path
 import logging
 
-from models_api import ChatGPTStrategy, DeepseekStrategy, GigaChatStrategy, PerplexityStrategy
+from models_api import ChatGPTStrategy, ChatGPTFileStrategy
 
 logger = logging.getLogger('bot')
 
@@ -27,22 +27,21 @@ class Topics(DynamicEnum):
 
 class Models(Enum):
     chatgpt = ChatGPTStrategy
-    perplexity = PerplexityStrategy
-    deepseek = DeepseekStrategy
-    gigachat = GigaChatStrategy
+    chatgpt_file = ChatGPTFileStrategy
 
 
 class SystemPrompt(DynamicEnum):
     INVESTMENT = 'investment'
+    INVESTMENT_DETAIL = 'investment_detail'
     STARTUPS = 'startups'
     STARTUPS_DETAIL = 'startups_detail'
 
 
 class SystemPrompts:
     """Класс для работы с системными промптами. Получение, обновление промптов."""
-    
+
     _instance = None
-    
+
     def __new__(cls):
         if cls._instance is None:
             logger.info(f'Создание экземпляра SystemPrompts')

@@ -154,6 +154,28 @@ class ChatContextManager:
         )
         return messages
 
+    def get_limited_messages_for_api(self, user_id: int, topic: str, limit: int = 3) -> List[dict]:
+        """Возвращает ограниченное количество последних сообщений для API, сохраняя системный промпт."""
+        chat_history = self.get_chat_history(user_id, topic)
+        if not chat_history:
+            logger.warning(f"Нет сообщений для API: пользователь {user_id}, тема '{topic}'")
+            return []
+
+        all_messages = chat_history.get_messages_for_api()
+        
+        system_prompts = [msg for msg in all_messages if msg['role'] == 'system']
+        
+        user_messages = [msg for msg in all_messages if msg['role'] == 'user']
+        last_user_message = user_messages[-1:] if user_messages else []
+        
+        result = system_prompts + last_user_message
+        
+        total_size = sum(len(msg['content']) for msg in result)
+        logger.info(
+            f"Получено {len(result)} минимальных сообщений для API (только системный промпт и последний запрос): пользователь {user_id}, тема '{topic}', общий размер: {total_size} символов"
+        )
+        return result
+
     def end_chat(self, user_id: int, topic: str) -> None:
         """Завершает чат пользователя по теме."""
         if self._check_chat_exists(user_id, topic):
