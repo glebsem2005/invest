@@ -56,20 +56,6 @@ class TopicKeyboard(DynamicKeyboard):
         return tuple(buttons)
 
 
-class ModelKeyboard(DynamicKeyboard):
-    """Клавиатура для выбора модели."""
-
-    @classmethod
-    def get_buttons(cls) -> Tuple[Button, ...]:
-        """Генерирует кнопки на основе доступных моделей."""
-        buttons = []
-        for model in Models:
-            model_name = model.name
-            display_name = model_name.capitalize()
-            buttons.append(Button(text=display_name, callback=f'model_{model_name}'))
-        return tuple(buttons)
-
-
 class FileAttachKeyboard(DynamicKeyboard):
     """Клавиатура для выбора прикрепления файла."""
 
@@ -85,7 +71,13 @@ class FileAttachKeyboard(DynamicKeyboard):
 class ContinueKeyboard(Keyboard):
     """Клавиатура для продолжения диалога."""
 
-    _buttons = ([Button('Да', 'continue_yes'), Button('Нет', 'continue_no')],)
+    _buttons = (
+        [
+            Button('Запросить детали', 'request_details'),
+            Button('Задать вопрос', 'continue_yes'),
+            Button('Завершить чат', 'continue_no'),
+        ],
+    )
 
 
 class AuthorizeKeyboard(Keyboard):
@@ -226,7 +218,7 @@ class StartHandler(BaseScenario):
                 )
             await UserStates.ACCESS.set()
         else:
-            await message.answer('Добро пожаловать! Чем я могу вам помочь?', reply_markup=TopicKeyboard())
+            await message.answer('Здравствуйте! Чем я могу вам помочь?', reply_markup=TopicKeyboard())
             await UserStates.CHOOSING_TOPIC.set()
 
     def register(self, dp: Dispatcher) -> None:
@@ -241,6 +233,8 @@ class ProcessingChooseTopicCallback(BaseScenario):
         topic_callback = callback_query.data
         topic_name = topic_callback.replace('topic_', '')
 
+        await callback_query.answer()
+
         logger.info(f'Пользователь {user_id} выбрал тему: {topic_name}')
 
         system_prompts = SystemPrompts()
@@ -250,44 +244,18 @@ class ProcessingChooseTopicCallback(BaseScenario):
         chat_context.start_new_chat(user_id, topic_name, system_prompt)
 
         await state.update_data(chosen_topic=topic_name)
+        await state.update_data(chosen_model='chatgpt')
+
         await callback_query.message.delete()
-        await callback_query.message.answer('Выберите ИИ-сервис для работы:', reply_markup=ModelKeyboard())
-        await UserStates.CHOOSING_MODEL.set()
-        await callback_query.answer()
+        prompt_message = await callback_query.message.answer('Какой Ваш запрос?')
+        await state.update_data(prompt_message_id=prompt_message.message_id)
+        await UserStates.ENTERING_PROMPT.set()
 
     def register(self, dp: Dispatcher) -> None:
         dp.register_callback_query_handler(
             self.process,
             lambda c: c.data.startswith('topic_'),
             state=UserStates.CHOOSING_TOPIC,
-        )
-
-
-class ProcessingChooseModelCallback(BaseScenario):
-    """Обработка выбора модели."""
-
-    async def process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
-        user_id = callback_query.from_user.id
-        model_callback = callback_query.data
-        model_name = model_callback.replace('model_', '')
-
-        logger.info(f'Пользователь {user_id} выбрал модель: {model_name}')
-
-        selected_model = Models[model_name]
-
-        await state.update_data(chosen_model=selected_model.name, model_display=selected_model.value)
-        await callback_query.message.delete()
-        prompt_message = await callback_query.message.answer('Введите ваш запрос к ИИ:')
-
-        await state.update_data(prompt_message_id=prompt_message.message_id)
-        await UserStates.ENTERING_PROMPT.set()
-        await callback_query.answer()
-
-    def register(self, dp: Dispatcher) -> None:
-        dp.register_callback_query_handler(
-            self.process,
-            lambda c: c.data.startswith('model_'),
-            state=UserStates.CHOOSING_MODEL,
         )
 
 
@@ -333,6 +301,8 @@ class AttachFileCallback(BaseScenario):
         user_id = callback_query.from_user.id
         user_data = await state.get_data()
 
+        await callback_query.answer()
+
         if 'file_message_id' in user_data:
             try:
                 await self.bot.delete_message(chat_id=user_id, message_id=user_data['file_message_id'])
@@ -347,8 +317,6 @@ class AttachFileCallback(BaseScenario):
         else:
             logger.info(f'Пользователь {user_id} решил продолжить без файла')
             await self.process_query_with_file(callback_query.message, state, file_content='')
-
-        await callback_query.answer()
 
     async def process_query_with_file(self, message, state, file_content=''):
         """Обрабатывает запрос с файлом или без него."""
@@ -378,8 +346,8 @@ class AttachFileCallback(BaseScenario):
         messages = chat_context.get_messages_for_api(user_id, topic_name)
         logger.info(f'Подготовлено {len(messages)} сообщений для API, размер запроса: {len(full_query)} символов')
 
-        model = Models[model_name].value
-        model_api = ModelAPI(model())
+        strategy = Models[model_name].value()
+        model_api = ModelAPI(strategy)
 
         try:
             await self.bot.send_chat_action(chat_id=user_id, action='typing')
@@ -473,25 +441,72 @@ class ProcessingContinueCallback(BaseScenario):
     async def process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
         user_id = callback_query.from_user.id
         continue_callback = callback_query.data
+        user_data = await state.get_data()
+
+        await callback_query.answer()
 
         if continue_callback == 'continue_yes':
             logger.info(f'Пользователь {user_id} решил продолжить диалог')
             await callback_query.message.delete()
-            prompt_message = await callback_query.message.answer('Введите ваш следующий вопрос:')
+            prompt_message = await self.bot.send_message(chat_id=user_id, text='Введите ваш следующий вопрос:')
             await state.update_data(prompt_message_id=prompt_message.message_id)
             await UserStates.CONTINUE_DIALOG.set()
+        elif continue_callback == 'request_details':
+            logger.info(f'Пользователь {user_id} запросил детальную информацию')
+            await callback_query.message.delete()
+
+            topic_name = user_data.get('chosen_topic')
+            model_name = user_data.get('chosen_model')
+
+            if topic_name == 'startups':
+                system_prompts = SystemPrompts()
+                system_prompt = system_prompts.get_prompt(SystemPrompt.STARTUPS_DETAIL)
+
+                chat_context = ChatContextManager()
+
+                messages = chat_context.get_messages_for_api(user_id, topic_name)
+
+                strategy = Models[model_name].value()
+                model_api = ModelAPI(strategy)
+
+                await self.bot.send_chat_action(chat_id=user_id, action='typing')
+                logger.info(f'Отправка запроса на детальный анализ к {model_name} для пользователя {user_id}')
+
+                new_messages = [{'role': 'system', 'content': system_prompt}]
+                for msg in messages:
+                    if msg['role'] != 'system':
+                        new_messages.append(msg)
+
+                response = await model_api.get_response(new_messages)
+                logger.info(f'Получен детальный ответ от {model_name}, длина: {len(response)} символов')
+
+                chat_context.add_message(user_id, topic_name, 'assistant', response)
+                escaped_response = self._escape_markdown(response)
+
+                max_length = 4000
+                for i in range(0, len(escaped_response), max_length):
+                    part = escaped_response[i : i + max_length]
+                    await self.bot.send_message(chat_id=user_id, text=part, parse_mode='MarkdownV2')
+
+                await self.bot.send_message(chat_id=user_id, text='Остались ли у Вас вопросы?', reply_markup=ContinueKeyboard())
+                await UserStates.ASKING_CONTINUE.set()
+            else:
+                await self.bot.send_message(
+                    chat_id=user_id,
+                    text='Детальный анализ не поддерживается для этого типа запроса.',
+                    reply_markup=ContinueKeyboard(),
+                )
+                await UserStates.ASKING_CONTINUE.set()
         else:
             logger.info(f'Пользователь {user_id} решил начать новый диалог')
             await callback_query.message.delete()
-            await callback_query.message.answer('Выберите тему для анализа:', reply_markup=TopicKeyboard())
+            await self.bot.send_message(chat_id=user_id, text='Выберите тему для анализа:', reply_markup=TopicKeyboard())
             await UserStates.CHOOSING_TOPIC.set()
-
-        await callback_query.answer()
 
     def register(self, dp: Dispatcher) -> None:
         dp.register_callback_query_handler(
             self.process,
-            lambda c: c.data.startswith('continue_'),
+            lambda c: c.data in ['continue_yes', 'continue_no', 'request_details'],
             state=UserStates.ASKING_CONTINUE,
         )
 
@@ -536,6 +551,8 @@ class AttachFileContinueCallback(BaseScenario):
         user_id = callback_query.from_user.id
         user_data = await state.get_data()
 
+        await callback_query.answer()
+
         if 'file_message_id' in user_data:
             try:
                 await self.bot.delete_message(chat_id=user_id, message_id=user_data['file_message_id'])
@@ -550,8 +567,6 @@ class AttachFileContinueCallback(BaseScenario):
         else:
             logger.info(f'Пользователь {user_id} решил продолжить без файла')
             await self.process_query_with_file(callback_query.message, state, file_content='')
-
-        await callback_query.answer()
 
     async def process_query_with_file(self, message, state, file_content=''):
         """Обрабатывает запрос с файлом или без него."""
@@ -581,8 +596,8 @@ class AttachFileContinueCallback(BaseScenario):
         messages = chat_context.get_messages_for_api(user_id, topic_name)
         logger.info(f'Подготовлено {len(messages)} сообщений для API, размер запроса: {len(full_query)} символов')
 
-        model = Models[model_name].value
-        model_api = ModelAPI(model())
+        strategy = Models[model_name].value()
+        model_api = ModelAPI(strategy)
 
         try:
             await self.bot.send_chat_action(chat_id=user_id, action='typing')
@@ -702,6 +717,8 @@ class AdminChoosePromptCallback(BaseScenario):
         prompt_callback = callback_query.data
         topic_name = prompt_callback.replace('prompt_', '')
 
+        await callback_query.answer()
+
         logger.info(f'Администратор {user_id} выбрал промпт {topic_name} для обновления')
         await state.update_data(chosen_prompt=topic_name)
 
@@ -709,7 +726,6 @@ class AdminChoosePromptCallback(BaseScenario):
         await callback_query.message.answer('Загрузите TXT-файл с новым содержимым промпта:')
         await AdminStates.UPLOADING_PROMPT.set()
         logger.info(f'Пользователь {user_id} переведен в режим загрузки промпта')
-        await callback_query.answer()
 
     def register(self, dp: Dispatcher) -> None:
         dp.register_callback_query_handler(
@@ -1022,12 +1038,12 @@ class ResetStateHandler(BaseScenario):
     async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
         user_id = message.from_user.id
         logger.info(f'Пользователь {user_id} запросил сброс состояния')
-        
+
         await state.finish()
-        
+
         await message.answer('Состояние сброшено. Выберите тему для анализа:', reply_markup=TopicKeyboard())
         await UserStates.CHOOSING_TOPIC.set()
-        
+
         logger.info(f'Состояние пользователя {user_id} успешно сброшено')
 
     def register(self, dp: Dispatcher) -> None:
@@ -1041,7 +1057,6 @@ class BotManager:
         'access': Access,
         'start': StartHandler,
         'choose_topic': ProcessingChooseTopicCallback,
-        'choose_model': ProcessingChooseModelCallback,
         'enter_prompt': ProcessingEnterPromptHandler,
         'attach_file': AttachFileCallback,
         'upload_file': UploadFileHandler,

@@ -1,5 +1,8 @@
 import os
+import pptx
+import docx
 import logging
+import PyPDF2
 from typing import BinaryIO, Dict, Type
 from abc import ABC, abstractmethod
 from aiogram import Bot
@@ -22,8 +25,6 @@ class PDFExtractor(FileExtractor):
 
     async def extract_text(self, file: BinaryIO) -> str:
         try:
-            import PyPDF2
-
             reader = PyPDF2.PdfReader(file)
             text = ''
 
@@ -42,8 +43,6 @@ class DocxExtractor(FileExtractor):
 
     async def extract_text(self, file: BinaryIO) -> str:
         try:
-            import docx
-
             doc = docx.Document(file)
             text = ''
 
@@ -61,8 +60,6 @@ class PPTXExtractor(FileExtractor):
 
     async def extract_text(self, file: BinaryIO) -> str:
         try:
-            import pptx
-
             presentation = pptx.Presentation(file)
             text = ''
 

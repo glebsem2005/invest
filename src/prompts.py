@@ -22,8 +22,7 @@ class DynamicEnum(Enum):
 
 class Topics(DynamicEnum):
     investment = 'Анализ инвестиционной возможности'
-    competitors = 'Анализ стратегии конкурентов'
-    market = 'Анализ рынка и трендов'
+    startups = 'Скаутинг стартапов'
 
 
 class Models(Enum):
@@ -35,8 +34,8 @@ class Models(Enum):
 
 class SystemPrompt(DynamicEnum):
     INVESTMENT = 'investment'
-    COMPETITORS = 'competitors'
-    MARKET = 'market'
+    STARTUPS = 'startups'
+    STARTUPS_DETAIL = 'startups_detail'
 
 
 class SystemPrompts:
