@@ -72,11 +72,9 @@ class ContinueKeyboard(Keyboard):
     """Клавиатура для продолжения диалога."""
 
     _buttons = (
-        [
-            Button('Запросить детали', 'request_details'),
-            Button('Задать вопрос', 'continue_yes'),
-            Button('Завершить чат', 'continue_no'),
-        ],
+        Button('Запросить детали', 'request_details'),
+        Button('Задать вопрос', 'continue_yes'),
+        Button('Завершить чат', 'continue_no'),
     )
 
 
@@ -808,10 +806,6 @@ class AdminUploadPromptHandler(BaseScenario):
             system_prompts.set_prompt(SystemPrompt[topic_name.upper()], file_content)
             logger.info(f'Промпт {topic_name} успешно обновлен администратором {user_id}')
 
-            TopicKeyboard.reset_instance()
-            AdminPromptKeyboard.reset_instance()
-            logger.debug('Клавиатуры сброшены')
-
             await message.answer(f"Промпт для темы '{Topics[topic_name].value}' успешно обновлен!")
         except KeyError:
             logger.error(f'Ошибка: тема {topic_name} не найдена')
@@ -973,10 +967,6 @@ class AdminNewPromptUploadHandler(BaseScenario):
             system_prompts = SystemPrompts()
             system_prompts.add_new_prompt(prompt_name, display_name, file_content)
             logger.info(f'Новый промпт {prompt_name} ({display_name}) успешно добавлен администратором {user_id}')
-
-            TopicKeyboard.reset_instance()
-            AdminPromptKeyboard.reset_instance()
-            logger.debug('Клавиатуры сброшены')
 
             await message.answer(f"Системный промпт для топика '{display_name}' успешно добавлен!\n")
         except Exception as e:

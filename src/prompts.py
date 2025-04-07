@@ -1,6 +1,7 @@
 from enum import Enum
 from pathlib import Path
 import logging
+from keyboards_builder import DynamicKeyboard
 
 from models_api import ChatGPTStrategy, ChatGPTFileStrategy
 
@@ -107,12 +108,21 @@ class SystemPrompts:
                 raise ValueError(f'Промпта для {prompt_type} не найдено.')
         return prompt
 
+    def _reset_dynamic_keyboards(self) -> None:
+        """Сбрасывает кеш всех динамических клавиатур после изменения промптов."""
+        try:
+            DynamicKeyboard.reset_all_keyboards()
+            logger.debug('Все динамические клавиатуры сброшены после изменения промптов')
+        except Exception as e:
+            logger.error(f'Ошибка при сбросе клавиатур: {e}', exc_info=True)
+
     def update_prompt(self, prompt_type: SystemPrompt, content: str) -> None:
         """Обновляет существующий промпт."""
         logger.info(f'Обновление промпта: {prompt_type.name}, размер: {len(content)} символов')
         self.prompts[prompt_type] = content
         filename = DEFAULT_PROMPTS_DIR / f'{prompt_type.value}.txt'
         self.update_or_create_file(content, filename)
+        self._reset_dynamic_keyboards()
         logger.info(f'Промпт {prompt_type.name} успешно обновлен')
 
     def add_new_prompt(self, name: str, display_name: str, content: str) -> None:
@@ -131,6 +141,7 @@ class SystemPrompts:
             self.update_or_create_file(content, filename)
 
             self.prompts[SystemPrompt[name.upper()]] = content
+            self._reset_dynamic_keyboards()
             logger.info(f"Новый промпт '{name}' успешно добавлен")
         except Exception as e:
             logger.error(f"Ошибка при добавлении промпта '{name}': {e}", exc_info=True)
