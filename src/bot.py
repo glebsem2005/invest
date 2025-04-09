@@ -15,6 +15,7 @@ from prompts import DEFAULT_PROMPTS_DIR, Models, SystemPrompt, Topics, SystemPro
 from chat_context import ChatContextManager
 from file_processor import FileProcessor
 import aiogram.utils.exceptions
+import traceback
 
 Logger()
 logger = logging.getLogger('bot')
@@ -44,6 +45,7 @@ class AdminStates(StatesGroup):
     NEW_PROMPT_NAME = State()  # Ввод технического имени нового топика
     NEW_PROMPT_DISPLAY = State()  # Ввод отображаемого имени нового топика
     NEW_PROMPT_UPLOAD = State()  # Загрузка файла с системным промптом
+    NEW_PROMPT_UPLOAD_DETAIL = State()  # Загрузка файла с детализированным промптом
 
 
 class TopicKeyboard(DynamicKeyboard):
@@ -408,8 +410,8 @@ class AttachFileCallback(BaseScenario):
                 escaped_response = self._escape_markdown(response)
                 escaped_detail = self._escape_markdown(detail_response)
                 
-                formatted_detail = escaped_detail.replace('\n', '\n>')
-                formatted_response = f"{escaped_response}\n\n>{formatted_detail}"
+                formatted_detail = escaped_detail.replace('\n', '\n>>')
+                formatted_response = f"{escaped_response}\n\n>>{formatted_detail}"
             else:
                 escaped_response = self._escape_markdown(response)
                 formatted_response = escaped_response
@@ -715,8 +717,8 @@ class AttachFileContinueCallback(BaseScenario):
                 escaped_response = self._escape_markdown(response)
                 escaped_detail = self._escape_markdown(detail_response)
                 
-                formatted_detail = escaped_detail.replace('\n', '\n>')
-                formatted_response = f"{escaped_response}\n\n>{formatted_detail}"
+                formatted_detail = escaped_detail.replace('\n', '\n>>')
+                formatted_response = f"{escaped_response}\n\n>>{formatted_detail}"
             else:
                 escaped_response = self._escape_markdown(response)
                 formatted_response = escaped_response
@@ -1090,13 +1092,21 @@ class AdminNewPromptHandler(BaseScenario):
     """Обработка команды администратора для создания нового топика и промпта."""
 
     async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
-        await message.answer('Пожалуйста, загрузите TXT-файл с системным промптом.')
+        user_id = message.from_user.id
+        
+        if user_id not in config.ADMIN_USERS:
+            await message.answer('У вас нет прав для выполнения этой команды.')
+            return
+
+        await message.answer('Шаг 1: Введите техническое имя топика (только латинские буквы и цифры):')
+        await AdminStates.NEW_PROMPT_NAME.set()
+        logger.info(f'Администратор {user_id} начал процесс создания нового топика')
 
     def register(self, dp: Dispatcher) -> None:
         dp.register_message_handler(
             self.process,
-            content_types=['text'],
-            state=AdminStates.NEW_PROMPT_UPLOAD,
+            commands=['new_prompt'],
+            state='*',
         )
 
 
@@ -1172,7 +1182,7 @@ class AdminNewPromptUploadHandler(BaseScenario):
         prompt_name = user_data['new_prompt_name']
         display_name = user_data['new_prompt_display']
 
-        logger.info(f'Получен файл для нового промпта {prompt_name} от администратора {user_id}')
+        logger.info(f'Получен файл для нового системного промпта {prompt_name} от администратора {user_id}')
 
         if not message.document or not message.document.file_name.endswith('.txt'):
             logger.warning(
@@ -1188,23 +1198,83 @@ class AdminNewPromptUploadHandler(BaseScenario):
         logger.debug(f'Файл {message.document.file_name} успешно загружен')
 
         file_content = downloaded_file.read().decode('utf-8')
-        logger.debug(f'Размер содержимого нового промпта: {len(file_content)} символов')
+        logger.debug(f'Размер содержимого системного промпта: {len(file_content)} символов')
 
         try:
-            system_prompts = SystemPrompts()
-            system_prompts.add_new_prompt(prompt_name, display_name, file_content)
-            logger.info(f'Новый промпт {prompt_name} ({display_name}) успешно добавлен администратором {user_id}')
-
-            await message.answer(f"Системный промпт для топика '{display_name}' успешно добавлен!\n")
+            await state.update_data(system_prompt_content=file_content)
+            await message.answer(f"Шаг 4: Загрузите TXT-файл с детализированным промптом для топика '{display_name}':")
+            await AdminStates.NEW_PROMPT_UPLOAD_DETAIL.set()
+            logger.info(f'Администратор {user_id} перешел к загрузке детализированного промпта для {prompt_name}')
         except Exception as e:
-            logger.error(f'Ошибка при добавлении системного промпта: {e}', exc_info=True)
+            logger.error(f'Ошибка при обработке системного промпта: {e}', exc_info=True)
             await message.answer(
-                'Произошла ошибка при добавлении системного промпта.\nСообщение об ошибке уже отправлено разработчику.\n'
+                'Произошла ошибка при обработке системного промпта.\nСообщение об ошибке уже отправлено разработчику.\n'
                 'Продолжите использование нажав команду /start',
             )
             await self.bot.send_message(
                 chat_id=config.OWNER_ID,
-                text=f'Произошла ошибка при добавлении системного промпта: {e}',
+                text=f'Произошла ошибка при обработке системного промпта: {e}\n\n{traceback.format_exc()}',
+            )
+            await state.finish()
+
+    def register(self, dp: Dispatcher) -> None:
+        dp.register_message_handler(
+            self.process,
+            content_types=['document'],
+            state=AdminStates.NEW_PROMPT_UPLOAD,
+        )
+
+
+class AdminNewPromptUploadDetailHandler(BaseScenario):
+    """Обработка загрузки файла с детализированным промптом."""
+
+    async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
+        user_id = message.from_user.id
+        user_data = await state.get_data()
+        prompt_name = user_data['new_prompt_name']
+        display_name = user_data['new_prompt_display']
+        system_prompt_content = user_data['system_prompt_content']
+
+        logger.info(f'Получен файл для нового детализированного промпта {prompt_name} от администратора {user_id}')
+
+        if not message.document or not message.document.file_name.endswith('.txt'):
+            logger.warning(
+                f'Неверный формат файла от пользователя {user_id}: {message.document.file_name if message.document else "нет файла"}'
+            )
+            await message.answer('Пожалуйста, загрузите файл в формате TXT.')
+            return
+
+        file_id = message.document.file_id
+        file = await self.bot.get_file(file_id)
+        file_path = file.file_path
+        downloaded_file = await self.bot.download_file(file_path)
+        logger.debug(f'Файл {message.document.file_name} успешно загружен')
+
+        detail_prompt_content = downloaded_file.read().decode('utf-8')
+        logger.debug(f'Размер содержимого детализированного промпта: {len(detail_prompt_content)} символов')
+
+        try:
+            system_prompts = SystemPrompts()
+            system_prompts.add_new_prompt(prompt_name, display_name, system_prompt_content, detail_prompt_content)
+            logger.info(f'Новый топик {prompt_name} ({display_name}) успешно добавлен администратором {user_id}')
+
+            await message.answer(f"Топик '{display_name}' успешно создан с системным и детализированным промптами!")
+            
+            await self.bot.send_message(
+                chat_id=user_id,
+                text=f"Топик '{display_name}' успешно создан!\n\n"
+                     f"Системный промпт: {len(system_prompt_content)} символов\n"
+                     f"Детализированный промпт: {len(detail_prompt_content)} символов"
+            )
+        except Exception as e:
+            logger.error(f'Ошибка при создании нового топика: {e}', exc_info=True)
+            await message.answer(
+                'Произошла ошибка при создании топика.\nСообщение об ошибке уже отправлено разработчику.\n'
+                'Продолжите использование нажав команду /start',
+            )
+            await self.bot.send_message(
+                chat_id=config.OWNER_ID,
+                text=f'Произошла ошибка при создании топика: {e}\n\n{traceback.format_exc()}',
             )
 
         await state.finish()
@@ -1216,7 +1286,7 @@ class AdminNewPromptUploadHandler(BaseScenario):
         dp.register_message_handler(
             self.process,
             content_types=['document'],
-            state=AdminStates.NEW_PROMPT_UPLOAD,
+            state=AdminStates.NEW_PROMPT_UPLOAD_DETAIL,
         )
 
 
@@ -1374,6 +1444,7 @@ class BotManager:
         'new_prompt_name': AdminNewPromptNameHandler,
         'new_prompt_display': AdminNewPromptDisplayHandler,
         'new_prompt_upload': AdminNewPromptUploadHandler,
+        'new_prompt_upload_detail': AdminNewPromptUploadDetailHandler,
         'new_prompt_text': AdminNewPromptTextHandler,
         'load_prompts': AdminLoadPromptsHandler,
     }
