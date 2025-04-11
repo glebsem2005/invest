@@ -71,5 +71,6 @@ class Config:
         raise ConfigError('Please set `OPENAI_API_KEY` env var.')
 
     OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-2024-08-06')
-    OPENAI_MAX_TOKENS = os.getenv('OPENAI_MAX_TOKENS', 2000)
+    OPENAI_MAX_TOKENS = os.getenv('OPENAI_MAX_TOKENS', 1000)
+    OPENAI_MAX_TOKENS_DETAIL = os.getenv('OPENAI_MAX_TOKENS_DETAIL', 3000)
     OPENAI_FILE_MODEL = os.getenv('OPENAI_FILE_MODEL', 'gpt-4o')

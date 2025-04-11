@@ -16,9 +16,11 @@ from chat_context import ChatContextManager
 from file_processor import FileProcessor
 import aiogram.utils.exceptions
 import traceback
+import html
 
 Logger()
 logger = logging.getLogger('bot')
+config = Config()
 
 
 class UserStates(StatesGroup):
@@ -105,7 +107,7 @@ class AdminPromptKeyboard(DynamicKeyboard):
 
 class PromptTypeKeyboard(Keyboard):
     """Клавиатура для выбора типа промпта (системный, детализированный или оба)."""
-    
+
     _buttons = (
         Button('Системный промпт', 'prompt_type_system'),
         Button('Детализированный промпт', 'prompt_type_detail'),
@@ -127,21 +129,55 @@ class BaseScenario(ABC):
     def register(self, dp: Dispatcher) -> None:
         pass
 
+    def _remove_links(self, text: str) -> str:
+        """Удаляет ссылки из текста в формате [текст](url)."""
+        try:
+            return re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+        except Exception as e:
+            logger.error(f'Ошибка при удалении ссылок из текста: {e}', exc_info=True)
+            return text
+
     def _escape_markdown(self, text: str) -> str:
-        """Экранирует потенциально опасные символы Markdown для безопасной отправки."""
+        """Экранирует символы Markdown для MarkdownV2, сохраняя форматирование жирного текста и удаляя ссылки."""
         try:
             text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
-            
-            chars = '_*[]()~`>#+-=|{}.!'
-            
-            for char in chars:
-                text = text.replace(char, f'\\{char}')
-            
-            logger.debug(f'Успешно экранирован текст для Markdown, размер: {len(text)} символов')
-            return text
+
+            result = ''
+            i = 0
+            while i < len(text):
+                if i + 1 < len(text) and text[i : i + 2] == '**':
+                    end_pos = text.find('**', i + 2)
+                    if end_pos != -1:
+                        bold_content = text[i + 2 : end_pos]
+                        escaped_content = ''
+                        for char in bold_content:
+                            if char in '_[]()~`>#+-=|{}.!':
+                                escaped_content += f'\\{char}'
+                            elif char == '*':
+                                escaped_content += '\\*'
+                            else:
+                                escaped_content += char
+
+                        result += f'*{escaped_content}*'
+                        i = end_pos + 2
+                        continue
+
+                if text[i] in '_*[]()~`>#+-=|{}.!':
+                    result += f'\\{text[i]}'
+                else:
+                    result += text[i]
+                i += 1
+
+            return result
         except Exception as e:
             logger.error(f'Ошибка при экранировании текста для Markdown: {e}', exc_info=True)
-            return text
+            escaped_text = ''
+            for char in text:
+                if char in '_*[]()~`>#+-=|{}.!':
+                    escaped_text += f'\\{char}'
+                else:
+                    escaped_text += char
+            return escaped_text
 
 
 class Access(BaseScenario):
@@ -365,9 +401,13 @@ class AttachFileCallback(BaseScenario):
         chat_context.add_message(user_id, topic_name, 'user', full_query)
 
         if model_name == 'chatgpt' and (not file_content or was_file_model):
-            messages = chat_context.get_limited_messages_for_api(user_id, topic_name, skip_system_prompt=skip_system_prompt)
+            messages = chat_context.get_limited_messages_for_api(
+                user_id,
+                topic_name,
+                skip_system_prompt=skip_system_prompt,
+            )
             logger.info(
-                f'Подготовлено {len(messages)} ограниченных сообщений для API, чтобы избежать превышения лимита токенов'
+                f'Подготовлено {len(messages)} ограниченных сообщений для API, чтобы избежать превышения лимита токенов',
             )
         else:
             messages = chat_context.get_messages_for_api(user_id, topic_name)
@@ -389,37 +429,49 @@ class AttachFileCallback(BaseScenario):
             await self.bot.send_chat_action(chat_id=user_id, action='typing')
             logger.info(f'Отправка запроса к {model_name} для пользователя {user_id}')
 
+            model_api.max_tokens = int(config.OPENAI_MAX_TOKENS)
             response = await model_api.get_response(messages)
             logger.info(f'Получен ответ от {model_name}, длина: {len(response)} символов')
 
             chat_context.add_message(user_id, topic_name, 'assistant', response)
 
             system_prompts = SystemPrompts()
-            detail_prompt_type = f"{topic_name.upper()}_DETAIL"
+            detail_prompt_type = f'{topic_name.upper()}_DETAIL'
             if hasattr(SystemPrompt, detail_prompt_type):
                 detail_prompt = system_prompts.get_prompt(SystemPrompt[detail_prompt_type])
-                
+
                 detail_messages = [
                     {'role': 'system', 'content': detail_prompt},
-                    {'role': 'user', 'content': full_query}
+                    {'role': 'user', 'content': full_query},
                 ]
 
+                model_api.max_tokens = int(config.OPENAI_MAX_TOKENS_DETAIL)
                 detail_response = await model_api.get_response(detail_messages)
                 logger.info(f'Получен детализированный ответ, длина: {len(detail_response)} символов')
 
+                chat_context.add_message(user_id, topic_name, 'assistant', response)
                 escaped_response = self._escape_markdown(response)
-                escaped_detail = self._escape_markdown(detail_response)
-                
-                formatted_detail = escaped_detail.replace('\n', '\n>>')
-                formatted_response = f"{escaped_response}\n\n>>{formatted_detail}"
-            else:
-                escaped_response = self._escape_markdown(response)
-                formatted_response = escaped_response
+                await message.answer(escaped_response, parse_mode='MarkdownV2')
 
-            max_length = 4000
-            for i in range(0, len(formatted_response), max_length):
-                part = formatted_response[i : i + max_length]
-                await message.answer(part, parse_mode='MarkdownV2')
+                max_chunk_size = 3000
+                detail_chunks = [
+                    detail_response[i : i + max_chunk_size] for i in range(0, len(detail_response), max_chunk_size)
+                ]
+
+                for i, chunk in enumerate(detail_chunks):
+                    chunk_without_links = self._remove_links(chunk)
+                    if i == 0:
+                        await message.answer(
+                            f'<blockquote expandable>{html.escape(chunk_without_links)}</blockquote>',
+                            parse_mode='HTML',
+                        )
+                    else:
+                        await message.answer(
+                            f'<blockquote expandable>Продолжение детализированного ответа ({i + 1}/{len(detail_chunks)}):\n\n{html.escape(chunk_without_links)}</blockquote>',
+                            parse_mode='HTML',
+                        )
+            else:
+                await message.answer(response)
 
             await message.answer('Остались ли у Вас вопросы?', reply_markup=ContinueKeyboard())
             await UserStates.ASKING_CONTINUE.set()
@@ -428,7 +480,7 @@ class AttachFileCallback(BaseScenario):
         except Exception as e:
             logger.error(f'Ошибка API {model_name}: {e}', exc_info=True)
             await message.answer(
-                'Произошла ошибка при получении ответа. Попробуйте еще раз или выберите другую модель введя команду `/start`.',
+                'Произошла ошибка при получении ответа.\nСообщение об ошибке уже отправлено разработчику.\nПродолжите использование нажав команду /start',
             )
             await self.bot.send_message(
                 chat_id=config.OWNER_ID,
@@ -505,82 +557,26 @@ class ProcessingContinueCallback(BaseScenario):
         if continue_callback == 'continue_yes':
             logger.info(f'Пользователь {user_id} решил продолжить диалог')
             await callback_query.message.delete()
-            
+
             await state.update_data(skip_system_prompt=True)
-            
+
             prompt_message = await self.bot.send_message(chat_id=user_id, text='Введите ваш следующий вопрос:')
             await state.update_data(prompt_message_id=prompt_message.message_id)
             await UserStates.CONTINUE_DIALOG.set()
-        elif continue_callback == 'request_details':
-            logger.info(f'Пользователь {user_id} запросил детальную информацию')
-            await callback_query.message.delete()
-
-            topic_name = user_data.get('chosen_topic')
-            model_name = user_data.get('chosen_model')
-
-            if topic_name in ['startups', 'investment']:
-                system_prompts = SystemPrompts()
-                if topic_name == 'startups':
-                    system_prompt = system_prompts.get_prompt(SystemPrompt.STARTUPS_DETAIL)
-                elif topic_name == 'investment':
-                    system_prompt = system_prompts.get_prompt(SystemPrompt.INVESTMENT_DETAIL)
-
-                chat_context = ChatContextManager()
-
-                messages = chat_context.get_messages_for_api(user_id, topic_name)
-
-                if model_name == 'chatgpt':
-                    logger.info(f'Запрос деталей, переключение на модель chatgpt_file вместо {model_name}')
-                    model_name = 'chatgpt_file'
-                    await state.update_data(was_file_model=True)
-
-                strategy = Models[model_name].value()
-                model_api = ModelAPI(strategy)
-
-                await self.bot.send_chat_action(chat_id=user_id, action='typing')
-                logger.info(f'Отправка запроса на детальный анализ к {model_name} для пользователя {user_id}')
-
-                new_messages = [{'role': 'system', 'content': system_prompt}]
-                user_messages = [msg for msg in messages if msg['role'] == 'user']
-                if user_messages:
-                    new_messages.append(user_messages[-1])
-
-                logger.info(f'Запрос деталей с минимальным контекстом: {len(new_messages)} сообщений')
-
-                response = await model_api.get_response(new_messages)
-                logger.info(f'Получен детальный ответ от {model_name}, длина: {len(response)} символов')
-
-                chat_context.add_message(user_id, topic_name, 'assistant', response)
-                escaped_response = self._escape_markdown(response)
-
-                max_length = 4000
-                for i in range(0, len(escaped_response), max_length):
-                    part = escaped_response[i : i + max_length]
-                    await self.bot.send_message(chat_id=user_id, text=part, parse_mode='MarkdownV2')
-
-                await self.bot.send_message(
-                    chat_id=user_id, text='Остались ли у Вас вопросы?', reply_markup=ContinueKeyboard()
-                )
-                await UserStates.ASKING_CONTINUE.set()
-            else:
-                await self.bot.send_message(
-                    chat_id=user_id,
-                    text='Детальный анализ не поддерживается для этого типа запроса.',
-                    reply_markup=ContinueKeyboard(),
-                )
-                await UserStates.ASKING_CONTINUE.set()
         else:
             logger.info(f'Пользователь {user_id} решил начать новый диалог')
             await callback_query.message.delete()
             await self.bot.send_message(
-                chat_id=user_id, text='Выберите тему для анализа:', reply_markup=TopicKeyboard()
+                chat_id=user_id,
+                text='Выберите тему для анализа:',
+                reply_markup=TopicKeyboard(),
             )
             await UserStates.CHOOSING_TOPIC.set()
 
     def register(self, dp: Dispatcher) -> None:
         dp.register_callback_query_handler(
             self.process,
-            lambda c: c.data in ['continue_yes', 'continue_no', 'request_details'],
+            lambda c: c.data in ['continue_yes', 'continue_no'],
             state=UserStates.ASKING_CONTINUE,
         )
 
@@ -595,7 +591,7 @@ class ContinueDialogHandler(BaseScenario):
         model_name = user_data['chosen_model']
 
         logger.info(
-            f'Продолжение диалога: {user_id}, модель={model_name}, тема={topic_name}, тип={message.content_type}'
+            f'Продолжение диалога: {user_id}, модель={model_name}, тема={topic_name}, тип={message.content_type}',
         )
 
         if 'prompt_message_id' in user_data:
@@ -662,7 +658,7 @@ class AttachFileContinueCallback(BaseScenario):
 
         if not user_query and not file_content:
             await message.answer(
-                'Необходимо ввести запрос или прикрепить файл. Пожалуйста, начните заново с команды /start'
+                'Необходимо ввести запрос или прикрепить файл. Пожалуйста, начните заново с команды /start',
             )
             return
 
@@ -672,9 +668,13 @@ class AttachFileContinueCallback(BaseScenario):
         chat_context.add_message(user_id, topic_name, 'user', full_query)
 
         if model_name == 'chatgpt' and (not file_content or was_file_model):
-            messages = chat_context.get_limited_messages_for_api(user_id, topic_name, skip_system_prompt=skip_system_prompt)
+            messages = chat_context.get_limited_messages_for_api(
+                user_id,
+                topic_name,
+                skip_system_prompt=skip_system_prompt,
+            )
             logger.info(
-                f'Подготовлено {len(messages)} ограниченных сообщений для API, чтобы избежать превышения лимита токенов'
+                f'Подготовлено {len(messages)} ограниченных сообщений для API, чтобы избежать превышения лимита токенов',
             )
         else:
             messages = chat_context.get_messages_for_api(user_id, topic_name)
@@ -702,13 +702,13 @@ class AttachFileContinueCallback(BaseScenario):
             chat_context.add_message(user_id, topic_name, 'assistant', response)
 
             system_prompts = SystemPrompts()
-            detail_prompt_type = f"{topic_name.upper()}_DETAIL"
+            detail_prompt_type = f'{topic_name.upper()}_DETAIL'
             if hasattr(SystemPrompt, detail_prompt_type):
                 detail_prompt = system_prompts.get_prompt(SystemPrompt[detail_prompt_type])
-                
+
                 detail_messages = [
                     {'role': 'system', 'content': detail_prompt},
-                    {'role': 'user', 'content': full_query}
+                    {'role': 'user', 'content': full_query},
                 ]
 
                 detail_response = await model_api.get_response(detail_messages)
@@ -716,9 +716,9 @@ class AttachFileContinueCallback(BaseScenario):
 
                 escaped_response = self._escape_markdown(response)
                 escaped_detail = self._escape_markdown(detail_response)
-                
+
                 formatted_detail = escaped_detail.replace('\n', '\n>>')
-                formatted_response = f"{escaped_response}\n\n>>{formatted_detail}"
+                formatted_response = f'{escaped_response}\n\n>>{formatted_detail}'
             else:
                 escaped_response = self._escape_markdown(response)
                 formatted_response = escaped_response
@@ -839,7 +839,7 @@ class AdminChoosePromptCallback(BaseScenario):
         await callback_query.message.delete()
         prompt_type_message = await callback_query.message.answer(
             'Выберите, какие промпты вы хотите обновить:',
-            reply_markup=PromptTypeKeyboard()
+            reply_markup=PromptTypeKeyboard(),
         )
         await state.update_data(prompt_type_message_id=prompt_type_message.message_id)
         await AdminStates.CHOOSING_PROMPT_TYPE.set()
@@ -908,7 +908,7 @@ class AdminUploadSystemPromptHandler(BaseScenario):
 
         if not message.document or not message.document.file_name.endswith('.txt'):
             logger.warning(
-                f'Неверный формат файла от пользователя {user_id}: {message.document.file_name if message.document else "нет файла"}'
+                f'Неверный формат файла от пользователя {user_id}: {message.document.file_name if message.document else "нет файла"}',
             )
             await message.answer('Пожалуйста, загрузите файл в формате TXT.')
             return
@@ -947,7 +947,7 @@ class AdminUploadSystemPromptHandler(BaseScenario):
                 chat_id=config.OWNER_ID,
                 text=f'Произошла ошибка при обновлении системного промпта: {e}',
             )
-        
+
         await state.finish()
         await message.answer('Чем я могу вам помочь?', reply_markup=TopicKeyboard())
         await UserStates.CHOOSING_TOPIC.set()
@@ -968,13 +968,13 @@ class AdminUploadDetailPromptHandler(BaseScenario):
         user_id = message.from_user.id
         user_data = await state.get_data()
         topic_name = user_data['chosen_prompt']
-        detail_topic_name = f"{topic_name.upper()}_DETAIL"
+        detail_topic_name = f'{topic_name.upper()}_DETAIL'
 
         logger.info(f'Получен файл для обновления детализированного промпта {topic_name} от администратора {user_id}')
 
         if not message.document or not message.document.file_name.endswith('.txt'):
             logger.warning(
-                f'Неверный формат файла от пользователя {user_id}: {message.document.file_name if message.document else "нет файла"}'
+                f'Неверный формат файла от пользователя {user_id}: {message.document.file_name if message.document else "нет файла"}',
             )
             await message.answer('Пожалуйста, загрузите файл в формате TXT.')
             return
@@ -993,17 +993,19 @@ class AdminUploadDetailPromptHandler(BaseScenario):
                 logger.warning(f'Детализированный промпт {detail_topic_name} не найден, возможно это ошибка')
                 await message.answer(
                     'Предупреждение: детализированный промпт для этой темы не найден в системе. '
-                    'Возможно, для данной темы его не существует.'
+                    'Возможно, для данной темы его не существует.',
                 )
             else:
                 system_prompts = SystemPrompts()
                 system_prompts.set_prompt(SystemPrompt[detail_topic_name], file_content)
                 logger.info(f'Детализированный промпт {detail_topic_name} успешно обновлен администратором {user_id}')
-                await message.answer(f"Детализированный промпт для темы '{Topics[topic_name].value}' успешно обновлен!")
-                
+                await message.answer(
+                    f"Детализированный промпт для темы '{Topics[topic_name].value}' успешно обновлен!",
+                )
+
         except KeyError:
             logger.error(f'Ошибка: тема {topic_name} или детализированный промпт {detail_topic_name} не найден')
-            await message.answer(f"Ошибка: тема или детализированный промпт не найден.")
+            await message.answer(f'Ошибка: тема или детализированный промпт не найден.')
         except Exception as e:
             logger.error(f'Ошибка при обновлении детализированного промпта: {e}', exc_info=True)
             await message.answer(
@@ -1014,7 +1016,7 @@ class AdminUploadDetailPromptHandler(BaseScenario):
                 chat_id=config.OWNER_ID,
                 text=f'Произошла ошибка при обновлении детализированного промпта: {e}',
             )
-        
+
         await state.finish()
         await message.answer('Чем я могу вам помочь?', reply_markup=TopicKeyboard())
         await UserStates.CHOOSING_TOPIC.set()
@@ -1036,11 +1038,13 @@ class AdminUploadPromptHandler(BaseScenario):
         user_data = await state.get_data()
         topic_name = user_data['chosen_prompt']
 
-        logger.info(f'Получен файл для обновления промпта {topic_name} от администратора {user_id} (обратная совместимость)')
+        logger.info(
+            f'Получен файл для обновления промпта {topic_name} от администратора {user_id} (обратная совместимость)',
+        )
 
         if not message.document or not message.document.file_name.endswith('.txt'):
             logger.warning(
-                f'Неверный формат файла от пользователя {user_id}: {message.document.file_name if message.document else "нет файла"}'
+                f'Неверный формат файла от пользователя {user_id}: {message.document.file_name if message.document else "нет файла"}',
             )
             await message.answer('Пожалуйста, загрузите файл в формате TXT.')
             return
@@ -1060,7 +1064,7 @@ class AdminUploadPromptHandler(BaseScenario):
             logger.info(f'Промпт {topic_name} успешно обновлен администратором {user_id}')
 
             await message.answer(f"Промпт для темы '{Topics[topic_name].value}' успешно обновлен!")
-            
+
         except KeyError:
             logger.error(f'Ошибка: тема {topic_name} не найдена')
             await message.answer(f"Ошибка: тема '{topic_name}' не найдена.")
@@ -1093,7 +1097,7 @@ class AdminNewPromptHandler(BaseScenario):
 
     async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
         user_id = message.from_user.id
-        
+
         if user_id not in config.ADMIN_USERS:
             await message.answer('У вас нет прав для выполнения этой команды.')
             return
@@ -1186,7 +1190,7 @@ class AdminNewPromptUploadHandler(BaseScenario):
 
         if not message.document or not message.document.file_name.endswith('.txt'):
             logger.warning(
-                f'Неверный формат файла от пользователя {user_id}: {message.document.file_name if message.document else "нет файла"}'
+                f'Неверный формат файла от пользователя {user_id}: {message.document.file_name if message.document else "нет файла"}',
             )
             await message.answer('Пожалуйста, загрузите файл в формате TXT.')
             return
@@ -1239,7 +1243,7 @@ class AdminNewPromptUploadDetailHandler(BaseScenario):
 
         if not message.document or not message.document.file_name.endswith('.txt'):
             logger.warning(
-                f'Неверный формат файла от пользователя {user_id}: {message.document.file_name if message.document else "нет файла"}'
+                f'Неверный формат файла от пользователя {user_id}: {message.document.file_name if message.document else "нет файла"}',
             )
             await message.answer('Пожалуйста, загрузите файл в формате TXT.')
             return
@@ -1259,12 +1263,12 @@ class AdminNewPromptUploadDetailHandler(BaseScenario):
             logger.info(f'Новый топик {prompt_name} ({display_name}) успешно добавлен администратором {user_id}')
 
             await message.answer(f"Топик '{display_name}' успешно создан с системным и детализированным промптами!")
-            
+
             await self.bot.send_message(
                 chat_id=user_id,
                 text=f"Топик '{display_name}' успешно создан!\n\n"
-                     f"Системный промпт: {len(system_prompt_content)} символов\n"
-                     f"Детализированный промпт: {len(detail_prompt_content)} символов"
+                f'Системный промпт: {len(system_prompt_content)} символов\n'
+                f'Детализированный промпт: {len(detail_prompt_content)} символов',
             )
         except Exception as e:
             logger.error(f'Ошибка при создании нового топика: {e}', exc_info=True)
@@ -1310,8 +1314,10 @@ class AdminUploadPromptTextHandler(BaseScenario):
     async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
         user_id = message.from_user.id
         current_state = await state.get_state()
-        logger.warning(f'Администратор {user_id} отправил текст вместо файла при обновлении промпта (состояние: {current_state})')
-        
+        logger.warning(
+            f'Администратор {user_id} отправил текст вместо файла при обновлении промпта (состояние: {current_state})',
+        )
+
         if current_state == 'AdminStates:UPLOADING_SYSTEM_PROMPT':
             await message.answer('Пожалуйста, загрузите TXT-файл с новым содержимым системного промпта.')
         elif current_state == 'AdminStates:UPLOADING_DETAIL_PROMPT':
