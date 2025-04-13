@@ -169,14 +169,21 @@ class ChatContextManager:
             system_prompts = []
             logger.info(f"Пропущен системный промпт для пользователя {user_id}, тема '{topic}'")
         
-        user_messages = [msg for msg in all_messages if msg['role'] == 'user']
-        last_user_message = user_messages[-1:] if user_messages else []
+        user_assistant_messages = [msg for msg in all_messages if msg['role'] != 'system']
         
-        result = system_prompts + last_user_message
+        if limit > 0 and len(user_assistant_messages) > limit:
+            user_assistant_messages = user_assistant_messages[-limit:]
+            logger.debug(f"Ограничено количество сообщений диалога до {limit}")
+        
+        if limit <= 0 and not skip_system_prompt and len(user_assistant_messages) == 1:
+            user_messages = [msg for msg in all_messages if msg['role'] == 'user']
+            user_assistant_messages = user_messages[-1:] if user_messages else []
+        
+        result = system_prompts + user_assistant_messages
         
         total_size = sum(len(msg['content']) for msg in result)
         logger.info(
-            f"Получено {len(result)} минимальных сообщений для API: пользователь {user_id}, тема '{topic}', общий размер: {total_size} символов"
+            f"Получено {len(result)} сообщений для API: пользователь {user_id}, тема '{topic}', общий размер: {total_size} символов"
         )
         return result
 

@@ -401,13 +401,15 @@ class AttachFileCallback(BaseScenario):
         chat_context.add_message(user_id, topic_name, 'user', full_query)
 
         if model_name == 'chatgpt' and (not file_content or was_file_model):
+            limit = 0 if not skip_system_prompt else 10
             messages = chat_context.get_limited_messages_for_api(
                 user_id,
                 topic_name,
+                limit=limit,
                 skip_system_prompt=skip_system_prompt,
             )
             logger.info(
-                f'Подготовлено {len(messages)} ограниченных сообщений для API, чтобы избежать превышения лимита токенов',
+                f'Подготовлено {len(messages)} сообщений для API (лимит={limit}, skip_system_prompt={skip_system_prompt})',
             )
         else:
             messages = chat_context.get_messages_for_api(user_id, topic_name)
@@ -439,11 +441,17 @@ class AttachFileCallback(BaseScenario):
             detail_prompt_type = f'{topic_name.upper()}_DETAIL'
             if hasattr(SystemPrompt, detail_prompt_type):
                 detail_prompt = system_prompts.get_prompt(SystemPrompt[detail_prompt_type])
-
-                detail_messages = [
-                    {'role': 'system', 'content': detail_prompt},
-                    {'role': 'user', 'content': full_query},
-                ]
+                
+                if skip_system_prompt:
+                    user_assistant_history = [msg for msg in messages if msg['role'] != 'system'][-5:]
+                    detail_messages = [{'role': 'system', 'content': detail_prompt}] + user_assistant_history
+                    logger.info(f'Для детализированного ответа использован контекст диалога: {len(user_assistant_history)} сообщений')
+                else:
+                    detail_messages = [
+                        {'role': 'system', 'content': detail_prompt},
+                        {'role': 'user', 'content': full_query},
+                    ]
+                    logger.info('Для детализированного ответа использован только текущий запрос без контекста диалога')
 
                 model_api.max_tokens = int(config.OPENAI_MAX_TOKENS_DETAIL)
                 detail_response = await model_api.get_response(detail_messages)
@@ -647,7 +655,7 @@ class AttachFileContinueCallback(BaseScenario):
         user_query = user_data.get('user_query', '')
 
         was_file_model = user_data.get('was_file_model', False)
-        skip_system_prompt = user_data.get('skip_system_prompt', False)
+        skip_system_prompt = user_data.get('skip_system_prompt', True)
 
         if 'processing_msg_id' in user_data:
             try:
@@ -668,13 +676,15 @@ class AttachFileContinueCallback(BaseScenario):
         chat_context.add_message(user_id, topic_name, 'user', full_query)
 
         if model_name == 'chatgpt' and (not file_content or was_file_model):
+            limit = 10
             messages = chat_context.get_limited_messages_for_api(
                 user_id,
                 topic_name,
+                limit=limit,
                 skip_system_prompt=skip_system_prompt,
             )
             logger.info(
-                f'Подготовлено {len(messages)} ограниченных сообщений для API, чтобы избежать превышения лимита токенов',
+                f'Подготовлено {len(messages)} сообщений для API (лимит={limit}, skip_system_prompt={skip_system_prompt})',
             )
         else:
             messages = chat_context.get_messages_for_api(user_id, topic_name)
@@ -705,15 +715,22 @@ class AttachFileContinueCallback(BaseScenario):
             detail_prompt_type = f'{topic_name.upper()}_DETAIL'
             if hasattr(SystemPrompt, detail_prompt_type):
                 detail_prompt = system_prompts.get_prompt(SystemPrompt[detail_prompt_type])
-
-                detail_messages = [
-                    {'role': 'system', 'content': detail_prompt},
-                    {'role': 'user', 'content': full_query},
-                ]
+                
+                if skip_system_prompt:
+                    user_assistant_history = [msg for msg in messages if msg['role'] != 'system'][-5:]
+                    detail_messages = [{'role': 'system', 'content': detail_prompt}] + user_assistant_history
+                    logger.info(f'Для детализированного ответа использован контекст диалога: {len(user_assistant_history)} сообщений')
+                else:
+                    detail_messages = [
+                        {'role': 'system', 'content': detail_prompt},
+                        {'role': 'user', 'content': full_query},
+                    ]
+                    logger.info('Для детализированного ответа использован только текущий запрос без контекста диалога')
 
                 detail_response = await model_api.get_response(detail_messages)
                 logger.info(f'Получен детализированный ответ, длина: {len(detail_response)} символов')
 
+                chat_context.add_message(user_id, topic_name, 'assistant', response)
                 escaped_response = self._escape_markdown(response)
                 escaped_detail = self._escape_markdown(detail_response)
 
