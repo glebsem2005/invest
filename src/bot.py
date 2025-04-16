@@ -340,7 +340,15 @@ class ProcessingChooseTopicCallback(BaseScenario):
         await state.update_data(chosen_model='chatgpt')
 
         await callback_query.message.delete()
-        prompt_message = await callback_query.message.answer('Какой Ваш запрос?')
+
+        examples = {
+            'investment': 'Покупка/Партнёрство с \*имя компании\*',
+            'startups': 'Поиск стартапов в сфере \*название сферы\*',
+        }
+        example = examples.get(topic_name, 'Покупка/Партнёрство с \*имя компании\*')
+        prompt_example = f'Какой Ваш запрос?\n_Пример: {example}_'
+        prompt_message = await callback_query.message.answer(prompt_example, parse_mode='MarkdownV2')
+
         await state.update_data(prompt_message_id=prompt_message.message_id)
         await UserStates.ENTERING_PROMPT.set()
 
