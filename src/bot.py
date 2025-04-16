@@ -179,6 +179,16 @@ class BaseScenario(ABC):
                     escaped_text += char
             return escaped_text
 
+    def _parse_token_limit_error(self, error_text: str) -> int:
+        """
+        Извлекает лимит токенов из текста ошибки OpenAI.
+        Пример: "Limit 6000, Requested 6158"
+        """
+        match = re.search(r'Limit (\d+), Requested (\d+)', error_text)
+        if match:
+            return int(match.group(1))
+        return None
+
 
 class Access(BaseScenario):
     """Обработка получения доступа к боту."""
@@ -487,9 +497,20 @@ class AttachFileCallback(BaseScenario):
             logger.warning(f'Устаревший callback_query для пользователя {user_id}')
         except Exception as e:
             logger.error(f'Ошибка API {model_name}: {e}', exc_info=True)
-            await message.answer(
-                'Произошла ошибка при получении ответа.\nСообщение об ошибке уже отправлено разработчику.\nПродолжите использование нажав команду /start',
-            )
+            error_text = str(e)
+            token_limit = self._parse_token_limit_error(error_text)
+            if token_limit:
+                await message.answer(
+                    f"⚠️ Вы превысили лимит токенов для модели.\n"
+                    f"Максимум: {token_limit} токенов.\n"
+                    f"Уменьшите размер запроса или файла и попробуйте снова."
+                )
+            else:
+                await message.answer(
+                    'Произошла ошибка при получении ответа.\n'
+                    'Сообщение об ошибке уже отправлено разработчику.\n'
+                    'Продолжите использование нажав команду /start',
+                )
             await self.bot.send_message(
                 chat_id=config.OWNER_ID,
                 text=f'Ошибка при отправке запроса в {model_name}.\n{e}',
@@ -751,9 +772,18 @@ class AttachFileContinueCallback(BaseScenario):
             logger.warning(f'Устаревший callback_query для пользователя {user_id}')
         except Exception as e:
             logger.error(f'Ошибка API {model_name}: {e}', exc_info=True)
-            await message.answer(
-                'Произошла ошибка при получении ответа. Попробуйте еще раз или выберите другую модель введя команду `/start`.',
-            )
+            error_text = str(e)
+            token_limit = self._parse_token_limit_error(error_text)
+            if token_limit:
+                await message.answer(
+                    f"⚠️ Вы превысили лимит токенов для модели.\n"
+                    f"Максимум: {token_limit} токенов.\n"
+                    f"Уменьшите размер запроса или файла и попробуйте снова."
+                )
+            else:
+                await message.answer(
+                    'Произошла ошибка при получении ответа. Попробуйте еще раз или выберите другую модель введя команду `/start`.',
+                )
             await self.bot.send_message(
                 chat_id=config.OWNER_ID,
                 text=f'Ошибка при отправке запроса в {model_name}.\n{e}',
