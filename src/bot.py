@@ -189,6 +189,30 @@ class BaseScenario(ABC):
             return int(match.group(1))
         return None
 
+    def _escape_markdown_v2(self, text: str) -> str:
+        escape_chars = r'_*[]()~`>#+-=|{}.!'
+        return ''.join(f'\\{c}' if c in escape_chars else c for c in text)
+
+    def split_markdown_message(self, text: str, max_length: int = 4000) -> list:
+        parts = []
+        while len(text) > max_length:
+            split_pos = text.rfind('\n', 0, max_length)
+            if split_pos == -1:
+                split_pos = text.rfind(' ', 0, max_length)
+            if split_pos == -1:
+                split_pos = max_length
+            part = text[:split_pos]
+            if part.count('*') % 2 != 0:
+                last_star = part.rfind('*')
+                if last_star != -1:
+                    split_pos = last_star
+                    part = text[:split_pos]
+            parts.append(part)
+            text = text[split_pos:]
+        if text:
+            parts.append(text)
+        return parts
+
 
 class Access(BaseScenario):
     """Обработка получения доступа к боту."""
@@ -266,6 +290,12 @@ class StartHandler(BaseScenario):
         user_id = message.from_user.id
         user_name = f'{message.from_user.first_name} {message.from_user.last_name}'
         logger.info(f'Команда /start от пользователя {user_id} ({user_name})')
+
+        chat_context = ChatContextManager()
+        logger.info(f'Завершаем все активные чаты пользователя {user_id} при /start')
+        chat_context.end_active_chats(user_id)
+        logger.info(f'Очищаем неактивные чаты пользователя {user_id} при /start')
+        chat_context.cleanup_user_context(user_id)
 
         if user_id not in config.AUTHORIZED_USERS_IDS:
             logger.info(f'Запрос авторизации для {user_id} к администраторам {config.ADMIN_USERS}')
@@ -445,17 +475,17 @@ class AttachFileCallback(BaseScenario):
             response = await model_api.get_response(messages)
             logger.info(f'Получен ответ от {model_name}, длина: {len(response)} символов')
 
-            chat_context.add_message(user_id, topic_name, 'assistant', response)
-
             system_prompts = SystemPrompts()
             detail_prompt_type = f'{topic_name.upper()}_DETAIL'
             if hasattr(SystemPrompt, detail_prompt_type):
                 detail_prompt = system_prompts.get_prompt(SystemPrompt[detail_prompt_type])
-                
+
                 if skip_system_prompt:
                     user_assistant_history = [msg for msg in messages if msg['role'] != 'system'][-5:]
                     detail_messages = [{'role': 'system', 'content': detail_prompt}] + user_assistant_history
-                    logger.info(f'Для детализированного ответа использован контекст диалога: {len(user_assistant_history)} сообщений')
+                    logger.info(
+                        f'Для детализированного ответа использован контекст диалога: {len(user_assistant_history)} сообщений'
+                    )
                 else:
                     detail_messages = [
                         {'role': 'system', 'content': detail_prompt},
@@ -496,14 +526,14 @@ class AttachFileCallback(BaseScenario):
         except aiogram.utils.exceptions.InvalidQueryID:
             logger.warning(f'Устаревший callback_query для пользователя {user_id}')
         except Exception as e:
-            logger.error(f'Ошибка API {model_name}: {e}', exc_info=True)
+            logger.error(f'Ошибка {model_name}: {e}', exc_info=True)
             error_text = str(e)
             token_limit = self._parse_token_limit_error(error_text)
             if token_limit:
                 await message.answer(
-                    f"⚠️ Вы превысили лимит токенов для модели.\n"
-                    f"Максимум: {token_limit} токенов.\n"
-                    f"Уменьшите размер запроса или файла и попробуйте снова."
+                    f'⚠️ Вы превысили лимит токенов для модели.\n'
+                    f'Максимум: {token_limit} токенов.\n'
+                    f'Уменьшите размер запроса или файла и попробуйте снова.'
                 )
             else:
                 await message.answer(
@@ -594,6 +624,7 @@ class ProcessingContinueCallback(BaseScenario):
             await UserStates.CONTINUE_DIALOG.set()
         else:
             logger.info(f'Пользователь {user_id} решил начать новый диалог')
+            await state.finish()
             await callback_query.message.delete()
             await self.bot.send_message(
                 chat_id=user_id,
@@ -730,17 +761,17 @@ class AttachFileContinueCallback(BaseScenario):
             response = await model_api.get_response(messages)
             logger.info(f'Получен ответ от {model_name}, длина: {len(response)} символов')
 
-            chat_context.add_message(user_id, topic_name, 'assistant', response)
-
             system_prompts = SystemPrompts()
             detail_prompt_type = f'{topic_name.upper()}_DETAIL'
             if hasattr(SystemPrompt, detail_prompt_type):
                 detail_prompt = system_prompts.get_prompt(SystemPrompt[detail_prompt_type])
-                
+
                 if skip_system_prompt:
                     user_assistant_history = [msg for msg in messages if msg['role'] != 'system'][-5:]
                     detail_messages = [{'role': 'system', 'content': detail_prompt}] + user_assistant_history
-                    logger.info(f'Для детализированного ответа использован контекст диалога: {len(user_assistant_history)} сообщений')
+                    logger.info(
+                        f'Для детализированного ответа использован контекст диалога: {len(user_assistant_history)} сообщений',
+                    )
                 else:
                     detail_messages = [
                         {'role': 'system', 'content': detail_prompt},
@@ -771,14 +802,14 @@ class AttachFileContinueCallback(BaseScenario):
         except aiogram.utils.exceptions.InvalidQueryID:
             logger.warning(f'Устаревший callback_query для пользователя {user_id}')
         except Exception as e:
-            logger.error(f'Ошибка API {model_name}: {e}', exc_info=True)
+            logger.error(f'Ошибка {model_name}: {e}', exc_info=True)
             error_text = str(e)
             token_limit = self._parse_token_limit_error(error_text)
             if token_limit:
                 await message.answer(
-                    f"⚠️ Вы превысили лимит токенов для модели.\n"
-                    f"Максимум: {token_limit} токенов.\n"
-                    f"Уменьшите размер запроса или файла и попробуйте снова."
+                    f'⚠️ Вы превысили лимит токенов для модели.\n'
+                    f'Максимум: {token_limit} токенов.\n'
+                    f'Уменьшите размер запроса или файла и попробуйте снова.'
                 )
             else:
                 await message.answer(
