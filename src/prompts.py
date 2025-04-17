@@ -36,6 +36,7 @@ class SystemPrompt(DynamicEnum):
     INVESTMENT_DETAIL = 'investment_detail'
     STARTUPS = 'startups'
     STARTUPS_DETAIL = 'startups_detail'
+    FILE_SUMMARY = 'file_summary'
 
 
 class SystemPrompts:
@@ -126,7 +127,9 @@ class SystemPrompts:
         logger.info(f'Промпт {prompt_type.name} успешно обновлен')
 
     def add_new_prompt(self, name: str, display_name: str, system_content: str, detail_content: str = None) -> None:
-        logger.info(f"Добавление нового промпта: {name} ('{display_name}'), размер системного: {len(system_content)} символов")
+        logger.info(
+            f"Добавление нового промпта: {name} ('{display_name}'), размер системного: {len(system_content)} символов"
+        )
         if name in Topics.__members__:
             logger.error(f"Промпт с именем '{name}' уже существует")
             raise ValueError(f"Промпт с именем '{name}' уже существует.")
@@ -135,7 +138,7 @@ class SystemPrompts:
             Topics.add_member(name, display_name)
             SystemPrompt.add_member(name.upper(), name)
             if detail_content:
-                SystemPrompt.add_member(f"{name.upper()}_DETAIL", f"{name}_detail")
+                SystemPrompt.add_member(f'{name.upper()}_DETAIL', f'{name}_detail')
             logger.debug(f'Добавлены элементы в Topics и SystemPrompt: {name}')
 
             filename = DEFAULT_PROMPTS_DIR / f'{name}.txt'
@@ -145,7 +148,7 @@ class SystemPrompts:
             if detail_content:
                 detail_filename = DEFAULT_PROMPTS_DIR / f'{name}_detail.txt'
                 self.update_or_create_file(detail_content, detail_filename)
-                self.prompts[SystemPrompt[f"{name.upper()}_DETAIL"]] = detail_content
+                self.prompts[SystemPrompt[f'{name.upper()}_DETAIL']] = detail_content
                 logger.debug(f'Сохранен детализированный промпт: {name}_detail')
 
             self._reset_dynamic_keyboards()

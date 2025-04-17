@@ -213,6 +213,19 @@ class BaseScenario(ABC):
             parts.append(text)
         return parts
 
+    async def summarize_file_content(self, file_content: str) -> str:
+        """Суммаризирует содержимое файла с помощью специального промпта и модели для файлов."""
+        summary_prompt = SystemPrompts().get_prompt(SystemPrompt.FILE_SUMMARY)
+        messages = [{'role': 'system', 'content': summary_prompt}, {'role': 'user', 'content': file_content}]
+        model_api = ModelAPI(Models.chatgpt_file.value())
+        try:
+            summary = await model_api.get_response(messages)
+            logger.info(f'Суммаризация файла завершена, длина summary: {len(summary)} символов')
+            return summary
+        except Exception as e:
+            logger.error(f'Ошибка при суммаризации файла: {e}', exc_info=True)
+            return None
+
 
 class Access(BaseScenario):
     """Обработка получения доступа к боту."""
@@ -443,35 +456,21 @@ class AttachFileCallback(BaseScenario):
             )
             return
 
-        full_query = f'{user_query}\n\nКонтекст из файла:\n{file_content}' if file_content else user_query
+        if file_content:
+            summary = await self.summarize_file_content(file_content)
+            if not summary:
+                await message.answer(
+                    'Произошла ошибка при суммаризации файла. Попробуйте еще раз или обратитесь к администратору.'
+                )
+                return
+            full_query = f'{user_query}\n\nКонтекст из файла (суммаризация):\n{summary}'
+        else:
+            full_query = user_query
 
         chat_context = ChatContextManager()
         chat_context.add_message(user_id, topic_name, 'user', full_query)
 
-        if model_name == 'chatgpt' and (not file_content or was_file_model):
-            limit = 0 if not skip_system_prompt else 10
-            messages = chat_context.get_limited_messages_for_api(
-                user_id,
-                topic_name,
-                limit=limit,
-                skip_system_prompt=skip_system_prompt,
-            )
-            logger.info(
-                f'Подготовлено {len(messages)} сообщений для API (лимит={limit}, skip_system_prompt={skip_system_prompt})',
-            )
-        else:
-            messages = chat_context.get_messages_for_api(user_id, topic_name)
-            logger.info(f'Подготовлено {len(messages)} сообщений для API, размер запроса: {len(full_query)} символов')
-
-        if skip_system_prompt and model_name != 'chatgpt':
-            messages = [msg for msg in messages if msg['role'] != 'system']
-            logger.info(f'Системный промпт пропущен, отправляется {len(messages)} сообщений')
-
-        if file_content and model_name == 'chatgpt':
-            logger.info(f'Обнаружен файл, переключение на модель chatgpt_file вместо {model_name}')
-            model_name = 'chatgpt_file'
-            await state.update_data(was_file_model=True)
-
+        model_name = 'chatgpt'
         strategy = Models[model_name].value()
         model_api = ModelAPI(strategy)
 
@@ -480,6 +479,15 @@ class AttachFileCallback(BaseScenario):
             logger.info(f'Отправка запроса к {model_name} для пользователя {user_id}')
 
             model_api.max_tokens = int(config.OPENAI_MAX_TOKENS)
+            messages = chat_context.get_limited_messages_for_api(
+                user_id,
+                topic_name,
+                limit=0 if not skip_system_prompt else 10,
+                skip_system_prompt=skip_system_prompt,
+            )
+            logger.info(
+                f'Подготовлено {len(messages)} сообщений для API (лимит={0 if not skip_system_prompt else 10}, skip_system_prompt={skip_system_prompt})',
+            )
             response = await model_api.get_response(messages)
             logger.info(f'Получен ответ от {model_name}, длина: {len(response)} символов')
 
@@ -730,35 +738,21 @@ class AttachFileContinueCallback(BaseScenario):
             )
             return
 
-        full_query = f'{user_query}\n\nКонтекст из файла:\n{file_content}' if file_content else user_query
+        if file_content:
+            summary = await self.summarize_file_content(file_content)
+            if not summary:
+                await message.answer(
+                    'Произошла ошибка при суммаризации файла. Попробуйте еще раз или обратитесь к администратору.'
+                )
+                return
+            full_query = f'{user_query}\n\nКонтекст из файла (суммаризация):\n{summary}'
+        else:
+            full_query = user_query
 
         chat_context = ChatContextManager()
         chat_context.add_message(user_id, topic_name, 'user', full_query)
 
-        if model_name == 'chatgpt' and (not file_content or was_file_model):
-            limit = 10
-            messages = chat_context.get_limited_messages_for_api(
-                user_id,
-                topic_name,
-                limit=limit,
-                skip_system_prompt=skip_system_prompt,
-            )
-            logger.info(
-                f'Подготовлено {len(messages)} сообщений для API (лимит={limit}, skip_system_prompt={skip_system_prompt})',
-            )
-        else:
-            messages = chat_context.get_messages_for_api(user_id, topic_name)
-            logger.info(f'Подготовлено {len(messages)} сообщений для API, размер запроса: {len(full_query)} символов')
-
-        if skip_system_prompt and model_name != 'chatgpt':
-            messages = [msg for msg in messages if msg['role'] != 'system']
-            logger.info(f'Системный промпт пропущен, отправляется {len(messages)} сообщений')
-
-        if file_content and model_name == 'chatgpt':
-            logger.info(f'Обнаружен файл, переключение на модель chatgpt_file вместо {model_name}')
-            model_name = 'chatgpt_file'
-            await state.update_data(was_file_model=True)
-
+        model_name = 'chatgpt'
         strategy = Models[model_name].value()
         model_api = ModelAPI(strategy)
 
@@ -766,6 +760,16 @@ class AttachFileContinueCallback(BaseScenario):
             await self.bot.send_chat_action(chat_id=user_id, action='typing')
             logger.info(f'Отправка запроса к {model_name} для пользователя {user_id}')
 
+            model_api.max_tokens = int(config.OPENAI_MAX_TOKENS)
+            messages = chat_context.get_limited_messages_for_api(
+                user_id,
+                topic_name,
+                limit=10,
+                skip_system_prompt=skip_system_prompt,
+            )
+            logger.info(
+                f'Подготовлено {len(messages)} сообщений для API (лимит=10, skip_system_prompt={skip_system_prompt})',
+            )
             response = await model_api.get_response(messages)
             logger.info(f'Получен ответ от {model_name}, длина: {len(response)} символов')
 
