@@ -1,22 +1,24 @@
-from abc import ABC, abstractmethod
+import html
 import logging
-from typing import Dict, Any, Tuple
 import re
+import traceback
+from abc import ABC, abstractmethod
+from typing import Any, Dict, Tuple
+
+import aiogram.utils.exceptions
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
+
 from access_middleware import AccessMiddleware
-from keyboards_builder import Button, Keyboard, DynamicKeyboard
-from logger import Logger
-from config import Config
-from models_api import ModelAPI
-from prompts import DEFAULT_PROMPTS_DIR, Models, SystemPrompt, Topics, SystemPrompts
 from chat_context import ChatContextManager
-from file_processor import FileProcessor
-import aiogram.utils.exceptions
-import traceback
-import html
+from config import Config
+from file_processor import ExcelExtractor, FileProcessor
+from keyboards_builder import Button, DynamicKeyboard, Keyboard
+from logger import Logger
+from models_api import ModelAPI
+from prompts import DEFAULT_PROMPTS_DIR, SCOUTING_EXCEL_PATH, Models, SystemPrompt, SystemPrompts, Topics
 
 Logger()
 logger = logging.getLogger('bot')
@@ -48,6 +50,7 @@ class AdminStates(StatesGroup):
     NEW_PROMPT_DISPLAY = State()  # Ввод отображаемого имени нового топика
     NEW_PROMPT_UPLOAD = State()  # Загрузка файла с системным промптом
     NEW_PROMPT_UPLOAD_DETAIL = State()  # Загрузка файла с детализированным промптом
+    UPLOADING_SCOUTING_FILE = State()  # Загрузка excel файла для скаутинга
 
 
 class TopicKeyboard(DynamicKeyboard):
@@ -116,7 +119,7 @@ class PromptTypeKeyboard(Keyboard):
 
 
 class BaseScenario(ABC):
-    """Базовый класс для сценариев."""
+    """Базовый класс для сценариев с общей логикой работы с запросами, файлами и ошибками."""
 
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
@@ -129,19 +132,139 @@ class BaseScenario(ABC):
     def register(self, dp: Dispatcher) -> None:
         pass
 
+    async def process_query_with_file(self, message, state, file_content='', skip_system_prompt=False, max_history=0):
+        """Универсальная обработка запроса пользователя с файлом или без файла.
+
+        skip_system_prompt: пропускать ли системный промпт (для продолжения диалога)
+        max_history: сколько сообщений истории включать (0 = всё, >0 = последние N)
+        """
+        user_id = message.chat.id
+        user_data = await state.get_data()
+        topic_name = user_data.get('chosen_topic')
+        model_name = user_data.get('chosen_model', 'chatgpt')
+        user_query = user_data.get('user_query', '')
+
+        await self.delete_message_by_id(user_id, user_data.get('processing_msg_id'))
+
+        if not user_query and not file_content:
+            await message.answer(
+                'Необходимо ввести запрос или прикрепить файл. Пожалуйста, начните заново с команды /start',
+            )
+            return
+
+        if topic_name == Topics.startups.name:
+            excel_text = await ExcelExtractor.extract_text_from_path(SCOUTING_EXCEL_PATH)
+            logging.info('Используется excel для стартап скаунтинга.')
+        else:
+            excel_text = ''
+
+        if file_content:
+            summary = await self.summarize_file_content(file_content)
+            if not summary:
+                await message.answer(
+                    'Произошла ошибка при суммаризации файла. Попробуйте еще раз или обратитесь к администратору.'
+                )
+                return
+            full_query = f'{user_query}\n\nКонтекст из файла (суммаризация):\n{summary}'
+        else:
+            full_query = user_query
+
+        chat_context = ChatContextManager()
+        chat_context.add_message(user_id, topic_name, 'user', full_query)
+
+        strategy = Models[model_name].value()
+        model_api = ModelAPI(strategy)
+
+        try:
+            await self.bot.send_chat_action(chat_id=user_id, action='typing')
+            messages = chat_context.get_limited_messages_for_api(
+                user_id,
+                topic_name,
+                limit=max_history,
+                skip_system_prompt=skip_system_prompt,
+            )
+            response = await model_api.get_response(messages)
+
+            system_prompts = SystemPrompts()
+            detail_prompt_type = f'{topic_name.upper()}_DETAIL'
+            detail_prompt = system_prompts.get_prompt(SystemPrompt[detail_prompt_type])
+            # - если skip_system_prompt=True (продолжение диалога), то добавляем последние 5 сообщений истории (без системных)
+            # - если skip_system_prompt=False (первый запрос), то только текущий вопрос пользователя
+            if skip_system_prompt:
+                user_assistant_history = [msg for msg in messages if msg['role'] != 'system'][-5:]
+                detail_messages = [{'role': 'system', 'content': detail_prompt}] + user_assistant_history
+            else:
+                detail_messages = [
+                    {'role': 'system', 'content': f'{detail_prompt}\n\n{excel_text}'},
+                    {'role': 'user', 'content': f'{full_query}'},
+                ]
+            detail_response = await model_api.get_response(detail_messages)
+            chat_context.add_message(user_id, topic_name, 'assistant', response)
+            await self.send_markdown_response(message, response)
+            await self.send_html_detail_response(message, detail_response)
+
+            await message.answer('Остались ли у Вас вопросы?', reply_markup=ContinueKeyboard())
+            await UserStates.ASKING_CONTINUE.set()
+        except aiogram.utils.exceptions.InvalidQueryID:
+            logger.warning(f'Устаревший callback_query для пользователя {user_id}')
+        except Exception as e:
+            await self.handle_error(message, e, model_name)
+
+    async def send_markdown_response(self, message, response):
+        escaped_response = self._escape_markdown(response)
+        max_length = 4000
+        for i in range(0, len(escaped_response), max_length):
+            part = escaped_response[i : i + max_length]
+            await message.answer(part, parse_mode='MarkdownV2')
+
+    async def send_html_detail_response(self, message, detail_response):
+        max_chunk_size = 3000
+        detail_chunks = [
+            detail_response[i : i + max_chunk_size] for i in range(0, len(detail_response), max_chunk_size)
+        ]
+        for i, chunk in enumerate(detail_chunks):
+            chunk_without_links = self._remove_links(chunk)
+            if i == 0:
+                await message.answer(
+                    f'<blockquote expandable>{html.escape(chunk_without_links)}</blockquote>',
+                    parse_mode='HTML',
+                )
+            else:
+                await message.answer(
+                    f'<blockquote expandable>Продолжение детализированного ответа ({i + 1}/{len(detail_chunks)}):\n\n{html.escape(chunk_without_links)}</blockquote>',
+                    parse_mode='HTML',
+                )
+
+    async def delete_message_by_id(self, user_id, message_id):
+        if message_id:
+            try:
+                await self.bot.delete_message(chat_id=user_id, message_id=message_id)
+            except Exception:
+                pass
+
+    async def handle_error(self, message, e, model_name):
+        logger.error(f'Ошибка {model_name}: {e}', exc_info=True)
+        error_text = str(e)
+        token_limit = self._parse_token_limit_error(error_text)
+        if token_limit:
+            await message.answer(
+                f'⚠️ Вы превысили лимит токенов для модели.\nМаксимум: {token_limit} токенов.\nУменьшите размер запроса или файла и попробуйте снова.'
+            )
+        else:
+            await message.answer(
+                'Произошла ошибка при получении ответа.\nСообщение об ошибке уже отправлено разработчику.\nПродолжите использование нажав команду /start',
+            )
+        await self.bot.send_message(chat_id=config.OWNER_ID, text=f'Ошибка при отправке запроса в {model_name}.\n{e}')
+
     def _remove_links(self, text: str) -> str:
-        """Удаляет ссылки из текста в формате [текст](url)."""
         try:
             return re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
-        except Exception as e:
-            logger.error(f'Ошибка при удалении ссылок из текста: {e}', exc_info=True)
+        except Exception:
             return text
 
     def _escape_markdown(self, text: str) -> str:
-        """Экранирует символы Markdown для MarkdownV2, сохраняя форматирование жирного текста и удаляя ссылки."""
         try:
             text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
-
             result = ''
             i = 0
             while i < len(text):
@@ -157,64 +280,25 @@ class BaseScenario(ABC):
                                 escaped_content += '\\*'
                             else:
                                 escaped_content += char
-
                         result += f'*{escaped_content}*'
                         i = end_pos + 2
                         continue
-
                 if text[i] in '_*[]()~`>#+-=|{}.!':
                     result += f'\\{text[i]}'
                 else:
                     result += text[i]
                 i += 1
-
             return result
-        except Exception as e:
-            logger.error(f'Ошибка при экранировании текста для Markdown: {e}', exc_info=True)
-            escaped_text = ''
-            for char in text:
-                if char in '_*[]()~`>#+-=|{}.!':
-                    escaped_text += f'\\{char}'
-                else:
-                    escaped_text += char
-            return escaped_text
+        except Exception:
+            return text
 
     def _parse_token_limit_error(self, error_text: str) -> int:
-        """
-        Извлекает лимит токенов из текста ошибки OpenAI.
-        Пример: "Limit 6000, Requested 6158"
-        """
         match = re.search(r'Limit (\d+), Requested (\d+)', error_text)
         if match:
             return int(match.group(1))
         return None
 
-    def _escape_markdown_v2(self, text: str) -> str:
-        escape_chars = r'_*[]()~`>#+-=|{}.!'
-        return ''.join(f'\\{c}' if c in escape_chars else c for c in text)
-
-    def split_markdown_message(self, text: str, max_length: int = 4000) -> list:
-        parts = []
-        while len(text) > max_length:
-            split_pos = text.rfind('\n', 0, max_length)
-            if split_pos == -1:
-                split_pos = text.rfind(' ', 0, max_length)
-            if split_pos == -1:
-                split_pos = max_length
-            part = text[:split_pos]
-            if part.count('*') % 2 != 0:
-                last_star = part.rfind('*')
-                if last_star != -1:
-                    split_pos = last_star
-                    part = text[:split_pos]
-            parts.append(part)
-            text = text[split_pos:]
-        if text:
-            parts.append(text)
-        return parts
-
     async def summarize_file_content(self, file_content: str) -> str:
-        """Суммаризирует содержимое файла с помощью специального промпта и модели для файлов."""
         summary_prompt = SystemPrompts().get_prompt(SystemPrompt.FILE_SUMMARY)
         messages = [{'role': 'system', 'content': summary_prompt}, {'role': 'user', 'content': file_content}]
         model_api = ModelAPI(Models.chatgpt_file.value())
@@ -408,203 +492,69 @@ class ProcessingEnterPromptHandler(BaseScenario):
         )
 
 
-class AttachFileCallback(BaseScenario):
-    """Обработка выбора прикрепления файла."""
+class AttachFileHandler(BaseScenario):
+    """Универсальный обработчик прикрепления файла (первый запрос и продолжение диалога)."""
 
     async def process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
         user_id = callback_query.from_user.id
         user_data = await state.get_data()
-
         await callback_query.answer()
-
-        if 'file_message_id' in user_data:
-            try:
-                await self.bot.delete_message(chat_id=user_id, message_id=user_data['file_message_id'])
-            except Exception as e:
-                logger.error(f'Ошибка удаления сообщения {user_data["file_message_id"]}: {e}')
-
+        await self.delete_message_by_id(user_id, user_data.get('file_message_id'))
         if callback_query.data == 'attach_file':
-            logger.info(f'Пользователь {user_id} решил прикрепить файл')
             file_prompt = await callback_query.message.answer('Пожалуйста, загрузите файл (PDF, Word, PPT):')
             await state.update_data(file_prompt_id=file_prompt.message_id)
             await UserStates.UPLOADING_FILE.set()
         else:
-            logger.info(f'Пользователь {user_id} решил продолжить без файла')
-            await self.process_query_with_file(callback_query.message, state, file_content='')
-
-    async def process_query_with_file(self, message, state, file_content=''):
-        """Обрабатывает запрос с файлом или без него."""
-        user_id = message.chat.id
-        user_data = await state.get_data()
-        topic_name = user_data['chosen_topic']
-        model_name = user_data['chosen_model']
-        user_query = user_data.get('user_query', '')
-
-        was_file_model = user_data.get('was_file_model', False)
-        skip_system_prompt = user_data.get('skip_system_prompt', False)
-
-        if 'processing_msg_id' in user_data:
-            try:
-                await self.bot.delete_message(chat_id=user_id, message_id=user_data['processing_msg_id'])
-                logger.debug(f'Удалено сообщение об обработке файла {user_data["processing_msg_id"]}')
-            except Exception as e:
-                logger.error(f'Ошибка удаления сообщения об обработке файла {user_data["processing_msg_id"]}: {e}')
-
-        if not user_query and not file_content:
-            await message.answer(
-                'Необходимо ввести запрос или прикрепить файл. Пожалуйста, начните заново с команды /start',
-            )
-            return
-
-        if file_content:
-            summary = await self.summarize_file_content(file_content)
-            if not summary:
-                await message.answer(
-                    'Произошла ошибка при суммаризации файла. Попробуйте еще раз или обратитесь к администратору.'
-                )
-                return
-            full_query = f'{user_query}\n\nКонтекст из файла (суммаризация):\n{summary}'
-        else:
-            full_query = user_query
-
-        chat_context = ChatContextManager()
-        chat_context.add_message(user_id, topic_name, 'user', full_query)
-
-        model_name = 'chatgpt'
-        strategy = Models[model_name].value()
-        model_api = ModelAPI(strategy)
-
-        try:
-            await self.bot.send_chat_action(chat_id=user_id, action='typing')
-            logger.info(f'Отправка запроса к {model_name} для пользователя {user_id}')
-
-            model_api.max_tokens = int(config.OPENAI_MAX_TOKENS)
-            messages = chat_context.get_limited_messages_for_api(
-                user_id,
-                topic_name,
-                limit=0 if not skip_system_prompt else 10,
+            # Без файла, универсальная обработка
+            skip_system_prompt = user_data.get('skip_system_prompt', False)
+            max_history = 10 if skip_system_prompt else 0
+            await self.process_query_with_file(
+                callback_query.message,
+                state,
+                file_content='',
                 skip_system_prompt=skip_system_prompt,
-            )
-            logger.info(
-                f'Подготовлено {len(messages)} сообщений для API (лимит={0 if not skip_system_prompt else 10}, skip_system_prompt={skip_system_prompt})',
-            )
-            response = await model_api.get_response(messages)
-            logger.info(f'Получен ответ от {model_name}, длина: {len(response)} символов')
-
-            system_prompts = SystemPrompts()
-            detail_prompt_type = f'{topic_name.upper()}_DETAIL'
-            if hasattr(SystemPrompt, detail_prompt_type):
-                detail_prompt = system_prompts.get_prompt(SystemPrompt[detail_prompt_type])
-
-                if skip_system_prompt:
-                    user_assistant_history = [msg for msg in messages if msg['role'] != 'system'][-5:]
-                    detail_messages = [{'role': 'system', 'content': detail_prompt}] + user_assistant_history
-                    logger.info(
-                        f'Для детализированного ответа использован контекст диалога: {len(user_assistant_history)} сообщений'
-                    )
-                else:
-                    detail_messages = [
-                        {'role': 'system', 'content': detail_prompt},
-                        {'role': 'user', 'content': full_query},
-                    ]
-                    logger.info('Для детализированного ответа использован только текущий запрос без контекста диалога')
-
-                model_api.max_tokens = int(config.OPENAI_MAX_TOKENS_DETAIL)
-                detail_response = await model_api.get_response(detail_messages)
-                logger.info(f'Получен детализированный ответ, длина: {len(detail_response)} символов')
-
-                chat_context.add_message(user_id, topic_name, 'assistant', response)
-                escaped_response = self._escape_markdown(response)
-                await message.answer(escaped_response, parse_mode='MarkdownV2')
-
-                max_chunk_size = 3000
-                detail_chunks = [
-                    detail_response[i : i + max_chunk_size] for i in range(0, len(detail_response), max_chunk_size)
-                ]
-
-                for i, chunk in enumerate(detail_chunks):
-                    chunk_without_links = self._remove_links(chunk)
-                    if i == 0:
-                        await message.answer(
-                            f'<blockquote expandable>{html.escape(chunk_without_links)}</blockquote>',
-                            parse_mode='HTML',
-                        )
-                    else:
-                        await message.answer(
-                            f'<blockquote expandable>Продолжение детализированного ответа ({i + 1}/{len(detail_chunks)}):\n\n{html.escape(chunk_without_links)}</blockquote>',
-                            parse_mode='HTML',
-                        )
-            else:
-                await message.answer(response)
-
-            await message.answer('Остались ли у Вас вопросы?', reply_markup=ContinueKeyboard())
-            await UserStates.ASKING_CONTINUE.set()
-        except aiogram.utils.exceptions.InvalidQueryID:
-            logger.warning(f'Устаревший callback_query для пользователя {user_id}')
-        except Exception as e:
-            logger.error(f'Ошибка {model_name}: {e}', exc_info=True)
-            error_text = str(e)
-            token_limit = self._parse_token_limit_error(error_text)
-            if token_limit:
-                await message.answer(
-                    f'⚠️ Вы превысили лимит токенов для модели.\n'
-                    f'Максимум: {token_limit} токенов.\n'
-                    f'Уменьшите размер запроса или файла и попробуйте снова.'
-                )
-            else:
-                await message.answer(
-                    'Произошла ошибка при получении ответа.\n'
-                    'Сообщение об ошибке уже отправлено разработчику.\n'
-                    'Продолжите использование нажав команду /start',
-                )
-            await self.bot.send_message(
-                chat_id=config.OWNER_ID,
-                text=f'Ошибка при отправке запроса в {model_name}.\n{e}',
+                max_history=max_history,
             )
 
     def register(self, dp: Dispatcher) -> None:
         dp.register_callback_query_handler(
             self.process,
             lambda c: c.data in ['attach_file', 'no_file'],
-            state=UserStates.ATTACHING_FILE,
+            state=[UserStates.ATTACHING_FILE, UserStates.ATTACHING_FILE_CONTINUE],
         )
 
 
 class UploadFileHandler(BaseScenario):
-    """Обработка загрузки файла."""
+    """Универсальный обработчик загрузки файла (первый запрос и продолжение диалога)."""
 
     async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
         user_id = message.from_user.id
         user_data = await state.get_data()
-
-        if 'file_prompt_id' in user_data:
-            try:
-                await self.bot.delete_message(chat_id=user_id, message_id=user_data['file_prompt_id'])
-            except Exception as e:
-                logger.error(f'Ошибка удаления сообщения {user_data["file_prompt_id"]}: {e}')
-
+        await self.delete_message_by_id(user_id, user_data.get('file_prompt_id'))
         if not message.document:
             await message.answer('Пожалуйста, загрузите файл в формате PDF, Word или PowerPoint.')
             return
-
         file_name = message.document.file_name
         file_size = message.document.file_size
         logger.info(f'Обработка файла: {file_name} ({file_size} байт)')
-
         try:
             processing_msg = await message.answer('Идет обработка файла...')
             file_content = await FileProcessor.extract_text_from_file(message.document, self.bot)
             logger.info(f'Извлечено {len(file_content)} символов из файла {file_name}')
-
             await state.update_data(processing_msg_id=processing_msg.message_id)
-
-            attach_file_handler = AttachFileCallback(self.bot)
-            await attach_file_handler.process_query_with_file(message, state, file_content)
-
+            skip_system_prompt = user_data.get('skip_system_prompt', False)
+            max_history = 10 if skip_system_prompt else 0
+            await self.process_query_with_file(
+                message,
+                state,
+                file_content,
+                skip_system_prompt=skip_system_prompt,
+                max_history=max_history,
+            )
         except ValueError as e:
             logger.error(f'Ошибка обработки файла {file_name}: {e}')
             await message.answer(
-                f'Произошла ошибка при обработке файла.\nСообщение об ошибке уже отправлено разработчику.\nПродолжите использование нажав команду /start',
+                'Произошла ошибка при обработке файла. Сообщение об ошибке уже отправлено разработчику. Продолжите использование нажав команду /start',
             )
             await self.bot.send_message(
                 chat_id=config.OWNER_ID,
@@ -615,7 +565,7 @@ class UploadFileHandler(BaseScenario):
         dp.register_message_handler(
             self.process,
             content_types=['document'],
-            state=UserStates.UPLOADING_FILE,
+            state=[UserStates.UPLOADING_FILE, UserStates.UPLOADING_FILE_CONTINUE],
         )
 
 
@@ -690,203 +640,22 @@ class ContinueDialogHandler(BaseScenario):
         dp.register_message_handler(self.process, content_types=['text'], state=UserStates.CONTINUE_DIALOG)
 
 
-class AttachFileContinueCallback(BaseScenario):
-    """Обработка выбора прикрепления файла при продолжении диалога."""
-
-    async def process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
-        user_id = callback_query.from_user.id
-        user_data = await state.get_data()
-
-        await callback_query.answer()
-
-        if 'file_message_id' in user_data:
-            try:
-                await self.bot.delete_message(chat_id=user_id, message_id=user_data['file_message_id'])
-            except Exception as e:
-                logger.error(f'Ошибка удаления сообщения {user_data["file_message_id"]}: {e}')
-
-        if callback_query.data == 'attach_file':
-            logger.info(f'Пользователь {user_id} решил прикрепить файл при продолжении диалога')
-            file_prompt = await callback_query.message.answer('Пожалуйста, загрузите файл (PDF, Word, PPT):')
-            await state.update_data(file_prompt_id=file_prompt.message_id)
-            await UserStates.UPLOADING_FILE_CONTINUE.set()
-        else:
-            logger.info(f'Пользователь {user_id} решил продолжить без файла')
-            await self.process_query_with_file(callback_query.message, state, file_content='')
-
-    async def process_query_with_file(self, message, state, file_content=''):
-        """Обрабатывает запрос с файлом или без него."""
-        user_id = message.chat.id
-        user_data = await state.get_data()
-        topic_name = user_data['chosen_topic']
-        model_name = user_data['chosen_model']
-        user_query = user_data.get('user_query', '')
-
-        was_file_model = user_data.get('was_file_model', False)
-        skip_system_prompt = user_data.get('skip_system_prompt', True)
-
-        if 'processing_msg_id' in user_data:
-            try:
-                await self.bot.delete_message(chat_id=user_id, message_id=user_data['processing_msg_id'])
-                logger.debug(f'Удалено сообщение об обработке файла {user_data["processing_msg_id"]}')
-            except Exception as e:
-                logger.error(f'Ошибка удаления сообщения об обработке файла {user_data["processing_msg_id"]}: {e}')
-
-        if not user_query and not file_content:
-            await message.answer(
-                'Необходимо ввести запрос или прикрепить файл. Пожалуйста, начните заново с команды /start',
-            )
-            return
-
-        if file_content:
-            summary = await self.summarize_file_content(file_content)
-            if not summary:
-                await message.answer(
-                    'Произошла ошибка при суммаризации файла. Попробуйте еще раз или обратитесь к администратору.'
-                )
-                return
-            full_query = f'{user_query}\n\nКонтекст из файла (суммаризация):\n{summary}'
-        else:
-            full_query = user_query
-
-        chat_context = ChatContextManager()
-        chat_context.add_message(user_id, topic_name, 'user', full_query)
-
-        model_name = 'chatgpt'
-        strategy = Models[model_name].value()
-        model_api = ModelAPI(strategy)
-
-        try:
-            await self.bot.send_chat_action(chat_id=user_id, action='typing')
-            logger.info(f'Отправка запроса к {model_name} для пользователя {user_id}')
-
-            model_api.max_tokens = int(config.OPENAI_MAX_TOKENS)
-            messages = chat_context.get_limited_messages_for_api(
-                user_id,
-                topic_name,
-                limit=10,
-                skip_system_prompt=skip_system_prompt,
-            )
-            logger.info(
-                f'Подготовлено {len(messages)} сообщений для API (лимит=10, skip_system_prompt={skip_system_prompt})',
-            )
-            response = await model_api.get_response(messages)
-            logger.info(f'Получен ответ от {model_name}, длина: {len(response)} символов')
-
-            system_prompts = SystemPrompts()
-            detail_prompt_type = f'{topic_name.upper()}_DETAIL'
-            if hasattr(SystemPrompt, detail_prompt_type):
-                detail_prompt = system_prompts.get_prompt(SystemPrompt[detail_prompt_type])
-
-                if skip_system_prompt:
-                    user_assistant_history = [msg for msg in messages if msg['role'] != 'system'][-5:]
-                    detail_messages = [{'role': 'system', 'content': detail_prompt}] + user_assistant_history
-                    logger.info(
-                        f'Для детализированного ответа использован контекст диалога: {len(user_assistant_history)} сообщений',
-                    )
-                else:
-                    detail_messages = [
-                        {'role': 'system', 'content': detail_prompt},
-                        {'role': 'user', 'content': full_query},
-                    ]
-                    logger.info('Для детализированного ответа использован только текущий запрос без контекста диалога')
-
-                detail_response = await model_api.get_response(detail_messages)
-                logger.info(f'Получен детализированный ответ, длина: {len(detail_response)} символов')
-
-                chat_context.add_message(user_id, topic_name, 'assistant', response)
-                escaped_response = self._escape_markdown(response)
-                escaped_detail = self._escape_markdown(detail_response)
-
-                formatted_detail = escaped_detail.replace('\n', '\n>>')
-                formatted_response = f'{escaped_response}\n\n>>{formatted_detail}'
-            else:
-                escaped_response = self._escape_markdown(response)
-                formatted_response = escaped_response
-
-            max_length = 4000
-            for i in range(0, len(formatted_response), max_length):
-                part = formatted_response[i : i + max_length]
-                await message.answer(part, parse_mode='MarkdownV2')
-
-            await message.answer('Остались ли у Вас вопросы?', reply_markup=ContinueKeyboard())
-            await UserStates.ASKING_CONTINUE.set()
-        except aiogram.utils.exceptions.InvalidQueryID:
-            logger.warning(f'Устаревший callback_query для пользователя {user_id}')
-        except Exception as e:
-            logger.error(f'Ошибка {model_name}: {e}', exc_info=True)
-            error_text = str(e)
-            token_limit = self._parse_token_limit_error(error_text)
-            if token_limit:
-                await message.answer(
-                    f'⚠️ Вы превысили лимит токенов для модели.\n'
-                    f'Максимум: {token_limit} токенов.\n'
-                    f'Уменьшите размер запроса или файла и попробуйте снова.'
-                )
-            else:
-                await message.answer(
-                    'Произошла ошибка при получении ответа. Попробуйте еще раз или выберите другую модель введя команду `/start`.',
-                )
-            await self.bot.send_message(
-                chat_id=config.OWNER_ID,
-                text=f'Ошибка при отправке запроса в {model_name}.\n{e}',
-            )
-
-    def register(self, dp: Dispatcher) -> None:
-        dp.register_callback_query_handler(
-            self.process,
-            lambda c: c.data in ['attach_file', 'no_file'],
-            state=UserStates.ATTACHING_FILE_CONTINUE,
-        )
-
-
-class UploadFileContinueHandler(BaseScenario):
-    """Обработка загрузки файла при продолжении диалога."""
+class ResetStateHandler(BaseScenario):
+    """Обработка команды /reset для сброса состояния пользователя."""
 
     async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
         user_id = message.from_user.id
-        user_data = await state.get_data()
+        logger.info(f'Пользователь {user_id} запросил сброс состояния')
 
-        if 'file_prompt_id' in user_data:
-            try:
-                await self.bot.delete_message(chat_id=user_id, message_id=user_data['file_prompt_id'])
-            except Exception as e:
-                logger.error(f'Ошибка удаления сообщения {user_data["file_prompt_id"]}: {e}')
+        await state.finish()
 
-        if not message.document:
-            await message.answer('Пожалуйста, загрузите файл в формате PDF, Word или PowerPoint.')
-            return
+        await message.answer('Состояние сброшено. Выберите тему для анализа:', reply_markup=TopicKeyboard())
+        await UserStates.CHOOSING_TOPIC.set()
 
-        file_name = message.document.file_name
-        file_size = message.document.file_size
-        logger.info(f'Обработка файла: {file_name} ({file_size} байт)')
-
-        try:
-            processing_msg = await message.answer('Идет обработка файла...')
-            file_content = await FileProcessor.extract_text_from_file(message.document, self.bot)
-            logger.info(f'Извлечено {len(file_content)} символов из файла {file_name}')
-
-            await state.update_data(processing_msg_id=processing_msg.message_id)
-
-            attach_file_handler = AttachFileContinueCallback(self.bot)
-            await attach_file_handler.process_query_with_file(message, state, file_content)
-
-        except ValueError as e:
-            logger.error(f'Ошибка обработки файла {file_name}: {e}')
-            await message.answer(
-                f'Произошла ошибка при обработке файла.\nСообщение об ошибке уже отправлено разработчику.\nПродолжите использование нажав команду /start',
-            )
-            await self.bot.send_message(
-                chat_id=config.OWNER_ID,
-                text=f'Ошибка при обработке файла: {e}',
-            )
+        logger.info(f'Состояние пользователя {user_id} успешно сброшено')
 
     def register(self, dp: Dispatcher) -> None:
-        dp.register_message_handler(
-            self.process,
-            content_types=['document'],
-            state=UserStates.UPLOADING_FILE_CONTINUE,
-        )
+        dp.register_message_handler(self.process, commands=['reset'], state='*')
 
 
 class AdminUpdatePromptsHandler(BaseScenario):
@@ -1121,7 +890,7 @@ class AdminUploadDetailPromptHandler(BaseScenario):
 
 
 class AdminUploadPromptHandler(BaseScenario):
-    """Обработка загрузки файла с новым промптом (для обратной совместимости)."""
+    """Обработка загрузки файла с новым промптом."""
 
     async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
         user_id = message.from_user.id
@@ -1463,6 +1232,81 @@ class AdminLoadPromptsHandler(BaseScenario):
         dp.register_message_handler(self.process, commands=['load_prompts'], state='*')
 
 
+class AdminUpdateScoutingExcelHandler(BaseScenario):
+    """Обработка команды администратора для обновления excel файла скаутинга стартапов."""
+
+    async def process(self, message: types.Message, **kwargs) -> Any:
+        user_id = message.from_user.id
+        if user_id not in config.ADMIN_USERS:
+            logger.warning(f'Отказано в доступе пользователю {user_id} - не является администратором')
+            await message.answer('У вас нет прав для выполнения этой команды.')
+            return
+
+        await message.answer('Отправьте Excel(.xlsx) файл для обновления.')
+        await AdminStates.UPLOADING_SCOUTING_FILE.set()
+        logger.info(f'Пользователь {user_id} переведен в режим обновления файла скаутинга.')
+
+    def register(self, dp: Dispatcher) -> None:
+        dp.register_message_handler(
+            self.process,
+            commands=['update_scouting_prompts'],
+            state='*',
+        )
+
+
+class AdminUploadScoutingExcelFileHandler(BaseScenario):
+    """Обработка загрузки файла с новым excel файлом для скаутинга."""
+
+    async def process(self, message: types.Message, state: FSMContext, **kwargs) -> Any:
+        user_id = message.from_user.id
+
+        logger.info(f'Получен файл для обновления excel файла для скаутинга от администратора {user_id}')
+
+        if not message.document or not message.document.file_name.endswith('.xlsx'):
+            logger.warning(
+                f'Неверный формат файла от пользователя {user_id}: {message.document.file_name if message.document else "нет файла"}'
+            )
+            await message.answer('Пожалуйста, загрузите файл в формате XLSX.')
+            return
+
+        try:
+            file_id = message.document.file_id
+            file = await self.bot.get_file(file_id)
+            file_path = file.file_path
+            downloaded_file = await self.bot.download_file(file_path)
+            logger.debug(f'Файл {message.document.file_name} успешно загружен')
+
+            file_content = downloaded_file.read()
+            logger.debug(f'Размер содержимого excel файла: {len(file_content)} символов')
+
+            system_prompts = SystemPrompts()
+            system_prompts.update_excel_file(file_content)
+            logger.info(f'Excel файл успешно обновлен администратором {user_id}')
+
+        except Exception as e:
+            logger.error(f'Ошибка при обновлении excel файла для скаутинга: {e}', exc_info=True)
+            await message.answer(
+                'Произошла ошибка при обновлении excel файла для скаутинга.\nСообщение об ошибке уже отправлено разработчику.\n'
+                'Продолжите использование нажав команду /start',
+            )
+            await self.bot.send_message(
+                chat_id=config.OWNER_ID,
+                text=f'Произошла ошибка при обновлении excel файла для скаутинга: {e}',
+            )
+
+        await state.finish()
+        await message.answer('Чем я могу вам помочь?', reply_markup=TopicKeyboard())
+        await UserStates.CHOOSING_TOPIC.set()
+        logger.info(f'Администратор {user_id} вернулся в режим выбора темы')
+
+    def register(self, dp: Dispatcher) -> None:
+        dp.register_message_handler(
+            self.process,
+            content_types=['document'],
+            state=AdminStates.UPLOADING_SCOUTING_FILE,
+        )
+
+
 class AdminHelpHandler(BaseScenario):
     """Обработка команды /help для администратора."""
 
@@ -1481,6 +1325,8 @@ class AdminHelpHandler(BaseScenario):
             '/new_prompt - Создание нового топика и системного промпта. Проведет через процесс создания '
             'нового топика с указанием технического имени, отображаемого названия и загрузкой файла промпта.\n\n'
             '/load_prompts - Выгрузка всех системных промптов в виде TXT-файлов для просмотра или редактирования.\n\n'
+            '/update_scouting_prompts - Обновление excel файла для темы "Скаутинг стартапов"\n\n'
+            '/list_auth_users - Получить список id авторизованных пользователей.\n\n'
             '/start - Перезапуск бота и возврат к выбору темы анализа.'
         )
 
@@ -1490,22 +1336,19 @@ class AdminHelpHandler(BaseScenario):
         dp.register_message_handler(self.process, commands=['help'], state='*')
 
 
-class ResetStateHandler(BaseScenario):
-    """Обработка команды /reset для сброса состояния пользователя."""
-
-    async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
+class AdminListAuthUsersHandler(BaseScenario):
+    async def process(self, message: types.Message, **kwargs) -> None:
         user_id = message.from_user.id
-        logger.info(f'Пользователь {user_id} запросил сброс состояния')
 
-        await state.finish()
+        if user_id not in config.ADMIN_USERS:
+            await message.answer('У вас нет прав для выполнения этой команды.')
+            return
 
-        await message.answer('Состояние сброшено. Выберите тему для анализа:', reply_markup=TopicKeyboard())
-        await UserStates.CHOOSING_TOPIC.set()
-
-        logger.info(f'Состояние пользователя {user_id} успешно сброшено')
+        auth_user_list = ', '.join(config.AUTHORIZED_USERS_IDS)
+        await message.answer(auth_user_list)
 
     def register(self, dp: Dispatcher) -> None:
-        dp.register_message_handler(self.process, commands=['reset'], state='*')
+        dp.register_message_handler(self.process, commands=['list_auth_users'], state='*')
 
 
 class BotManager:
@@ -1516,12 +1359,10 @@ class BotManager:
         'start': StartHandler,
         'choose_topic': ProcessingChooseTopicCallback,
         'enter_prompt': ProcessingEnterPromptHandler,
-        'attach_file': AttachFileCallback,
-        'upload_file': UploadFileHandler,
+        'attach_file': AttachFileHandler,  # универсальный
+        'upload_file': UploadFileHandler,  # универсальный
         'continue_dialog': ContinueDialogHandler,
         'continue_callback': ProcessingContinueCallback,
-        'attach_file_continue': AttachFileContinueCallback,
-        'upload_file_continue': UploadFileContinueHandler,
         'reset_state': ResetStateHandler,
     }
 
@@ -1545,8 +1386,14 @@ class BotManager:
         'load_prompts': AdminLoadPromptsHandler,
     }
 
+    admin_update_scouting_excel = {
+        'update_scouting_excel': AdminUpdateScoutingExcelHandler,
+        'upload_scouting_excle': AdminUploadScoutingExcelFileHandler,
+    }
+
     admin_common_scenario = {
         'help': AdminHelpHandler,
+        'auth_users_list': AdminListAuthUsersHandler,
     }
 
     def __init__(self, bot: Bot, dp: Dispatcher) -> None:
@@ -1566,6 +1413,10 @@ class BotManager:
         for scenario_name, scenario in self.admin_new_system_prompts_scenario.items():
             logger.info(f'Add for registering admin new handler: {scenario_name}')
             self._register_scenario(f'admin_new_{scenario_name}', scenario(bot))
+
+        for scenario_name, scenario in self.admin_update_scouting_excel.items():
+            logger.info(f'Add for registering admin scouting excel handler: {scenario_name}')
+            self._register_scenario(f'admin_scouting_excel_{scenario_name}', scenario(bot))
 
         for scenario_name, scenario in self.admin_common_scenario.items():
             logger.info(f'Add for registering admin common handler: {scenario_name}')

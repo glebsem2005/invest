@@ -1,10 +1,12 @@
-import os
-import pptx
-import docx
 import logging
-import PyPDF2
-from typing import BinaryIO, Dict, Type
+import os
 from abc import ABC, abstractmethod
+from typing import BinaryIO, Dict, Type
+
+import docx
+import openpyxl
+import pptx
+import PyPDF2
 from aiogram import Bot
 from aiogram.types import Document
 
@@ -92,6 +94,37 @@ class TXTExtractor(FileExtractor):
                 raise ValueError(f'Не удалось извлечь текст из TXT: {e}')
 
 
+class ExcelExtractor(FileExtractor):
+    """Извлечение текста из Excel файлов."""
+
+    @staticmethod
+    def _workbook_to_text(wb) -> str:
+        text = ''
+        for ws in wb.worksheets:
+            for row in ws.iter_rows(values_only=True):
+                row_text = '\t'.join([str(cell) if cell is not None else '' for cell in row])
+                text += row_text + '\n'
+        return text.strip()
+
+    async def extract_text(self, file: BinaryIO) -> str:
+        try:
+            file.seek(0)
+            wb = openpyxl.load_workbook(file, read_only=True, data_only=True)
+            return self._workbook_to_text(wb)
+        except Exception as e:
+            logger.error(f'Ошибка при извлечении текста из Excel: {e}')
+            raise ValueError(f'Не удалось извлечь текст из Excel: {e}')
+
+    @staticmethod
+    async def extract_text_from_path(path: str) -> str:
+        try:
+            wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+            return ExcelExtractor._workbook_to_text(wb)
+        except Exception as e:
+            logger.error(f'Ошибка при чтении Excel-файла по пути {path}: {e}')
+            raise ValueError(f'Ошибка при чтении Excel-файла по пути {path}: {e}')
+
+
 class FileProcessor:
     """Класс для обработки файлов различных форматов."""
 
@@ -102,6 +135,7 @@ class FileProcessor:
         '.pptx': PPTXExtractor,
         '.ppt': PPTXExtractor,
         '.txt': TXTExtractor,
+        '.xlsx': ExcelExtractor,
     }
 
     @classmethod

@@ -1,10 +1,10 @@
+import logging
 from abc import ABC, abstractmethod
 from typing import Dict, List
-import logging
-from openai import AsyncOpenAI
-from openai.types.chat.completion_create_params import WebSearchOptions
-from config import Config
 
+from openai import AsyncOpenAI
+
+from config import Config
 
 logger = logging.getLogger('bot')
 config = Config()
@@ -52,19 +52,33 @@ class ChatGPTStrategy(ModelStrategy):
         self._max_tokens = value
         logger.info(f'[{self.__class__.__name__}] Установлен лимит токенов: {value}')
 
+    def _format_messages_for_log(self, messages: list, max_len: int = 50) -> str:
+        lines = [f'Отправка сообщений в модель (всего: {len(messages)}):']
+        for idx, msg in enumerate(messages, 1):
+            role = msg.get('role', 'unknown')
+            content = msg.get('content', '')
+            content_len = len(content)
+            if content_len > max_len:
+                display_content = content[:max_len].replace('\n', ' ').replace('\r', ' ') + '... (truncated)'
+            else:
+                display_content = content.replace('\n', ' ').replace('\r', ' ')
+            lines.append(f'  {idx}. role={role}; len={content_len}; text="{display_content}"')
+        return '\n'.join(lines)
+
     async def get_response(self, messages: List[Dict[str, str]]) -> str:
         """Отправляет запрос к ChatGPT и возвращает ответ."""
         try:
             logger.info(
                 f'[{self.__class__.__name__}] Отправка запроса, модель: {self.model}, max_tokens: {self._max_tokens}'
             )
-            logger.debug(f'[{self.__class__.__name__}] Сообщения: {messages}')
+            logger.debug(f'[{self.__class__.__name__}] {self._format_messages_for_log(messages)}')
 
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 # max_tokens=self._max_tokens,  # INFO: согласно доке теперь это параметр max_completion_tokens, попробуем временнно вообще убрать (https://platform.openai.com/docs/api-reference/chat)
-                web_search_options=WebSearchOptions(search_context_size='high'),
+                # web_search_options=WebSearchOptions(search_context_size='high'),  # COMMENT: только модель gpt-4o поддерживает поиск
+                web_search_options={},
             )
 
             content = response.choices[0].message.content.strip()
@@ -110,7 +124,6 @@ class ChatGPTFileStrategy(ModelStrategy):
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                # max_tokens=self._max_tokens,  # INFO: согласно доке теперь это параметр max_completion_tokens, попробуем временнно вообще убрать (https://platform.openai.com/docs/api-reference/chat)
             )
 
             content = response.choices[0].message.content.strip()
