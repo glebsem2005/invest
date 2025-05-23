@@ -22,7 +22,7 @@ class ExcelFileManager:
 
     _instance = None
     _file_id = None
-    _vector_store_id = 'vs_68304c3f66248191a6d747d2bd75cdfa' or None
+    _vector_store_id = config.VECTOR_STORE_ID or None
 
     def __new__(cls):
         if cls._instance is None:

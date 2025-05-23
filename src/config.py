@@ -1,7 +1,7 @@
 import os
-from typing import List, Set
-from dotenv import load_dotenv, dotenv_values
+from typing import List, Optional, Set
 
+from dotenv import dotenv_values, load_dotenv
 
 config = {
     **dotenv_values('.env'),
@@ -74,3 +74,10 @@ class Config:
     OPENAI_MAX_TOKENS = os.getenv('OPENAI_MAX_TOKENS', 1000)
     OPENAI_MAX_TOKENS_DETAIL = os.getenv('OPENAI_MAX_TOKENS_DETAIL', 3000)
     OPENAI_FILE_MODEL = os.getenv('OPENAI_FILE_MODEL', 'gpt-4o')
+
+    @property
+    def VECTOR_STORE_ID(self) -> Optional[str]:
+        VECTOR_STORE_ID = os.getenv('VECTOR_STORE_ID')
+        if VECTOR_STORE_ID:
+            return str(VECTOR_STORE_ID)
+        return None
