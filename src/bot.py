@@ -14,11 +14,11 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 from access_middleware import AccessMiddleware
 from chat_context import ChatContextManager
 from config import Config
-from file_processor import ExcelExtractor, FileProcessor
+from file_processor import FileProcessor
 from keyboards_builder import Button, DynamicKeyboard, Keyboard
 from logger import Logger
-from models_api import ModelAPI
-from prompts import DEFAULT_PROMPTS_DIR, SCOUTING_EXCEL_PATH, Models, SystemPrompt, SystemPrompts, Topics
+from models_api import ExcelFileManager, ExcelSearchStrategy, ModelAPI
+from prompts import DEFAULT_PROMPTS_DIR, Models, SystemPrompt, SystemPrompts, Topics
 
 Logger()
 logger = logging.getLogger('bot')
@@ -152,12 +152,6 @@ class BaseScenario(ABC):
             )
             return
 
-        if topic_name == Topics.startups.name:
-            excel_text = await ExcelExtractor.extract_text_from_path(SCOUTING_EXCEL_PATH)
-            logging.info('Используется excel для стартап скаунтинга.')
-        else:
-            excel_text = ''
-
         if file_content:
             summary = await self.summarize_file_content(file_content)
             if not summary:
@@ -165,17 +159,24 @@ class BaseScenario(ABC):
                     'Произошла ошибка при суммаризации файла. Попробуйте еще раз или обратитесь к администратору.'
                 )
                 return
-            full_query = f'{user_query}\n\nКонтекст из файла (суммаризация):\n{summary}'
+            file_context = f'\n\nКонтекст из файла (суммаризация):\n{summary}'
         else:
-            full_query = user_query
+            file_context = ''
 
         chat_context = ChatContextManager()
-        chat_context.add_message(user_id, topic_name, 'user', full_query)
-
         strategy = Models[model_name].value()
         model_api = ModelAPI(strategy)
-
+        
         try:
+            if topic_name == Topics.startups.name:
+                excel_search = ExcelSearchStrategy()
+                excel_data = await excel_search.get_response([{'role': 'user', 'content': user_query}])
+                full_query = f'{user_query}\n\nРелевантные данные из базы стартапов:\n{excel_data}{file_context}'
+            else:
+                full_query = f'{user_query}{file_context}'
+            
+            chat_context.add_message(user_id, topic_name, 'user', full_query)
+
             await self.bot.send_chat_action(chat_id=user_id, action='typing')
             messages = chat_context.get_limited_messages_for_api(
                 user_id,
@@ -195,8 +196,8 @@ class BaseScenario(ABC):
                 detail_messages = [{'role': 'system', 'content': detail_prompt}] + user_assistant_history
             else:
                 detail_messages = [
-                    {'role': 'system', 'content': f'{detail_prompt}\n\n{excel_text}'},
-                    {'role': 'user', 'content': f'{full_query}'},
+                    {'role': 'system', 'content': detail_prompt},
+                    {'role': 'user', 'content': full_query},
                 ]
             detail_response = await model_api.get_response(detail_messages)
             chat_context.add_message(user_id, topic_name, 'assistant', response)
@@ -442,7 +443,7 @@ class ProcessingChooseTopicCallback(BaseScenario):
             'investment': 'Покупка/Партнёрство с \*имя компании\*',
             'startups': 'Поиск стартапов в сфере \*название сферы\*',
         }
-        example = examples.get(topic_name, 'Покупка/Партнёрство с \*имя компании\*')
+        example = examples[topic_name]
         prompt_example = f'Какой Ваш запрос?\n_Пример: {example}_'
         prompt_message = await callback_query.message.answer(prompt_example, parse_mode='MarkdownV2')
 
@@ -1279,9 +1280,22 @@ class AdminUploadScoutingExcelFileHandler(BaseScenario):
             file_content = downloaded_file.read()
             logger.debug(f'Размер содержимого excel файла: {len(file_content)} символов')
 
-            system_prompts = SystemPrompts()
-            system_prompts.update_excel_file(file_content)
+            await self.bot.send_chat_action(chat_id=user_id, action='upload_document')
+
+            file_manager = ExcelFileManager()
+            await file_manager.update_excel_file(file_content)
             logger.info(f'Excel файл успешно обновлен администратором {user_id}')
+
+            await file_manager.delete_file()
+            await file_manager.upload_file()
+
+            await message.answer('Файл обновляется на серверах OpenAI, пожалуйста ожидайте')
+            is_file_updated = await file_manager.check_status_file()
+            if not is_file_updated:
+                await message.answer('Не удалось обновить файл. Сообщение об ошибке отправлено разработчику.')
+
+            logger.info('Excel файл успешно обновлен в OpenAI')
+            await message.answer('Excel файл успешно обновлен и готов к использованию.')
 
         except Exception as e:
             logger.error(f'Ошибка при обновлении excel файла для скаутинга: {e}', exc_info=True)
@@ -1359,8 +1373,8 @@ class BotManager:
         'start': StartHandler,
         'choose_topic': ProcessingChooseTopicCallback,
         'enter_prompt': ProcessingEnterPromptHandler,
-        'attach_file': AttachFileHandler,  # универсальный
-        'upload_file': UploadFileHandler,  # универсальный
+        'attach_file': AttachFileHandler,
+        'upload_file': UploadFileHandler,
         'continue_dialog': ContinueDialogHandler,
         'continue_callback': ProcessingContinueCallback,
         'reset_state': ResetStateHandler,
@@ -1388,7 +1402,7 @@ class BotManager:
 
     admin_update_scouting_excel = {
         'update_scouting_excel': AdminUpdateScoutingExcelHandler,
-        'upload_scouting_excle': AdminUploadScoutingExcelFileHandler,
+        'upload_scouting_excel': AdminUploadScoutingExcelFileHandler,
     }
 
     admin_common_scenario = {

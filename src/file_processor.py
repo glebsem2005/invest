@@ -98,13 +98,29 @@ class ExcelExtractor(FileExtractor):
     """Извлечение текста из Excel файлов."""
 
     @staticmethod
+    def _clean_text(text: str) -> str:
+        """Очищает текст от лишних символов."""
+        if not text:
+            return ''
+        text = ' '.join(str(text).strip().split())
+        text = ' '.join(text.split())
+        return text
+
+    @staticmethod
     def _workbook_to_text(wb) -> str:
-        text = ''
+        text = []
         for ws in wb.worksheets:
+            headers = next(ws.iter_rows(values_only=True))
+            headers = [ExcelExtractor._clean_text(h) for h in headers]
+            
+            text.append('|'.join(headers))
+            
             for row in ws.iter_rows(values_only=True):
-                row_text = '\t'.join([str(cell) if cell is not None else '' for cell in row])
-                text += row_text + '\n'
-        return text.strip()
+                cleaned_row = [ExcelExtractor._clean_text(cell) for cell in row]
+                if any(cleaned_row):
+                    text.append('|'.join(cleaned_row))
+        
+        return '\n'.join(text)
 
     async def extract_text(self, file: BinaryIO) -> str:
         try:

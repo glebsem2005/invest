@@ -9,9 +9,6 @@ logger = logging.getLogger('bot')
 
 BASE_DIR = Path(__file__).parent.absolute()
 DEFAULT_PROMPTS_DIR = BASE_DIR / 'default_prompts'
-STATIC_FILES_DIR = BASE_DIR / 'static_files'
-
-SCOUTING_EXCEL_PATH = STATIC_FILES_DIR / 'scouting_data.xlsx'
 
 
 class DynamicEnum(Enum):
@@ -164,11 +161,3 @@ class SystemPrompts:
         """Устанавливает содержимое промпта."""
         logger.debug(f'Установка содержимого промпта {prompt_type.name}')
         self.update_prompt(prompt_type, content)
-
-    def update_excel_file(self, content: str) -> None:
-        """Обновляем содержимое excel файла для скаутинга."""
-        filename = STATIC_FILES_DIR / 'scouting_data.xlsx'
-        filename.parent.mkdir(parents=True, exist_ok=True)
-        with open(filename, 'wb') as f:
-            f.write(content)
-        logger.info(f'Excel файл скаутинга: {filename} успешно обновлен.')

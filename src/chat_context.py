@@ -1,7 +1,7 @@
-from typing import Dict, List, Literal, Optional
+import logging
 from dataclasses import dataclass
 from datetime import datetime
-import logging
+from typing import Dict, List, Literal, Optional
 
 logger = logging.getLogger('bot')
 
@@ -32,9 +32,6 @@ class ChatHistory:
         """Добавляет новое сообщение в историю."""
         message = ChatMessage(role=role, content=content)
         self.messages.append(message)
-        logger.debug(
-            f"Добавлено сообщение с ролью '{role}' в историю чата '{self.topic}', размер: {len(content)} символов",
-        )
 
     def get_messages_for_api(self) -> List[dict]:
         """Возвращает сообщения в формате для API."""
@@ -129,7 +126,7 @@ class ChatContextManager:
 
         chat_history.add_message(role, content)
         logger.info(
-            f"Добавлено сообщение с ролью '{role}' для пользователя {user_id} по теме '{topic}', размер: {len(content)} символов"
+            f"Добавлено сообщение с ролью '{role}' для пользователя {user_id} по теме '{topic}', размер: {len(content)} символов, текст: {content[:50]}"
         )
 
     def get_chat_history(self, user_id: int, topic: str) -> Optional[ChatHistory]:
@@ -154,7 +151,13 @@ class ChatContextManager:
         )
         return messages
 
-    def get_limited_messages_for_api(self, user_id: int, topic: str, limit: int = 3, skip_system_prompt: bool = False) -> List[dict]:
+    def get_limited_messages_for_api(
+        self,
+        user_id: int,
+        topic: str,
+        limit: int = 3,
+        skip_system_prompt: bool = False,
+    ) -> List[dict]:
         """Возвращает ограниченное количество последних сообщений для API, сохраняя системный промпт."""
         chat_history = self.get_chat_history(user_id, topic)
         if not chat_history:
@@ -169,17 +172,17 @@ class ChatContextManager:
             system_prompts = []
             logger.info(f"Пропущен системный промпт для пользователя {user_id}, тема '{topic}'")
         
-        user_assistant_messages = [msg for msg in all_messages if msg['role'] != 'system']
+        user_messages = [msg for msg in all_messages if msg['role'] != 'system']
         
-        if limit > 0 and len(user_assistant_messages) > limit:
-            user_assistant_messages = user_assistant_messages[-limit:]
+        if limit > 0 and len(user_messages) > limit:
+            user_messages = user_messages[-limit:]
             logger.debug(f"Ограничено количество сообщений диалога до {limit}")
         
-        if limit <= 0 and not skip_system_prompt and len(user_assistant_messages) == 1:
+        if limit <= 0 and not skip_system_prompt and len(user_messages) == 1:
             user_messages = [msg for msg in all_messages if msg['role'] == 'user']
-            user_assistant_messages = user_messages[-1:] if user_messages else []
-        
-        result = system_prompts + user_assistant_messages
+            user_messages = user_messages[-1:] if user_messages else []
+
+        result = system_prompts + user_messages
         
         total_size = sum(len(msg['content']) for msg in result)
         logger.info(
