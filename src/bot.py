@@ -1358,7 +1358,7 @@ class AdminListAuthUsersHandler(BaseScenario):
             await message.answer('У вас нет прав для выполнения этой команды.')
             return
 
-        auth_user_list = ', '.join(config.AUTHORIZED_USERS_IDS)
+        auth_user_list = ', '.join([str(i) for i in config.AUTHORIZED_USERS_IDS])
         await message.answer(auth_user_list)
 
     def register(self, dp: Dispatcher) -> None:
