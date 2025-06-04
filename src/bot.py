@@ -24,6 +24,11 @@ Logger()
 logger = logging.getLogger('bot')
 config = Config()
 
+print("OWNER_ID:", config.OWNER_ID)
+print("ADMIN_USERS:", config.ADMIN_USERS)
+print("USERS:", config.USERS)
+print("AUTHORIZED_USERS_IDS:", config.AUTHORIZED_USERS_IDS)
+
 
 class UserStates(StatesGroup):
     ACCESS = State()
