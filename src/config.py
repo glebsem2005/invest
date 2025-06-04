@@ -3,12 +3,12 @@ from typing import List, Optional, Set
 
 from dotenv import dotenv_values, load_dotenv
 
+load_dotenv('_env')
+
 config = {
-    **dotenv_values('.env'),
+    **dotenv_values('_env'),
     **os.environ,
 }
-
-load_dotenv()
 
 
 class ConfigError(Exception): ...
