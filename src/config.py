@@ -4,11 +4,11 @@ from typing import List, Optional, Set
 from dotenv import dotenv_values, load_dotenv
 
 config = {
-    **dotenv_values('_env'),
+    **dotenv_values('.env'),
     **os.environ,
 }
 
-load_dotenv('_env')
+load_dotenv()
 
 
 class ConfigError(Exception): ...
