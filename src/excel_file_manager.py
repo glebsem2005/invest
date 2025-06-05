@@ -11,6 +11,8 @@ from file_processor import ExcelExtractor
 logger = logging.getLogger('bot')
 config = Config()
 
+print("API KEY DEBUG:", config.OPENAI_API_KEY)
+
 BASE_DIR = Path(__file__).parent.absolute()
 STATIC_FILES_DIR = BASE_DIR / 'static_files'
 SCOUTING_EXCEL_PATH = STATIC_FILES_DIR / 'scouting_data.xlsx'
