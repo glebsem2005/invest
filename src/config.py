@@ -1,14 +1,8 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
 from typing import List, Optional, Set
-
-from dotenv import dotenv_values, load_dotenv
-
-config = {
-    **dotenv_values('.env'),
-    **os.environ,
-}
-
-load_dotenv()
 
 
 class ConfigError(Exception): ...
