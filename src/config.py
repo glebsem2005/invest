@@ -65,9 +65,9 @@ class Config:
 
     @property
     def OPENAI_API_KEY(self) -> str:
-        OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', "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")
+        OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
         if OPENAI_API_KEY:
-            return str(OPENAI_API_KEY)
+            return "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"
         raise ConfigError('Please set `OPENAI_API_KEY` env var.')
 
     OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-2024-08-06')
