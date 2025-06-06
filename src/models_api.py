@@ -2,7 +2,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Dict, List
 
-import aiolimiter
+from aiolimiter import AsyncLimiter
 
 from openai import AsyncOpenAI
 
