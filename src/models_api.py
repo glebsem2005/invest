@@ -22,27 +22,6 @@ class ModelStrategy(ABC):
         ...
 
 
-import asyncio
-import logging
-from abc import ABC, abstractmethod
-from typing import Dict, List
-
-from openai import AsyncOpenAI
-from aiolimiter import AsyncLimiter
-
-from config import Config
-
-logger = logging.getLogger('bot')
-config = Config()
-
-
-class ModelStrategy(ABC):
-    """Абстрактный класс для стратегий взаимодействия с моделями."""
-    @abstractmethod
-    async def get_response(self, messages: List[Dict[str, str]]) -> str:
-        ...
-
-
 class ChatGPTStrategy(ModelStrategy):
     """Стратегия для взаимодействия с ChatGPT через OpenAI API с лимитом запросов."""
 
