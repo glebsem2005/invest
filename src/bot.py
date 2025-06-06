@@ -245,17 +245,24 @@ class BaseScenario(ABC):
 
     async def handle_error(self, message, e, model_name):
         logger.error(f'Ошибка {model_name}: {e}', exc_info=True)
-        error_text = str(e)
-        token_limit = self._parse_token_limit_error(error_text)
+
+        token_limit = self._parse_token_limit_error(str(e))
         if token_limit:
             await message.answer(
-                f'⚠️ Вы превысили лимит токенов для модели.\nМаксимум: {token_limit} токенов.\nУменьшите размер запроса или файла и попробуйте снова.'
+                f'⚠️ Вы превысили лимит токенов для модели.\nМаксимум: {token_limit} токенов.\nПожалуйста, уменьшите запрос и попробуйте снова.'
             )
         else:
+        # Новый дружелюбный ответ, без показа ошибки
             await message.answer(
-                'Произошла ошибка при получении ответа.\nСообщение об ошибке уже отправлено разработчику.\nПродолжите использование нажав команду /start',
+                'Извините, произошла временная ошибка. Пожалуйста, подождите 5 секунд и попробуйте ещё раз.\n'
+                'Если проблема не исчезнет, обратитесь к администратору.'
             )
-        await self.bot.send_message(chat_id=config.OWNER_ID, text=f'Ошибка при отправке запроса в {model_name}.\n{e}')
+
+        # Отправляем детали ошибки админу для отладки
+        await self.bot.send_message(
+            chat_id=config.OWNER_ID,
+            text=f'Ошибка при запросе к {model_name} от пользователя {message.chat.id}:\n{e}'
+        )
 
     def _remove_links(self, text: str) -> str:
         try:
