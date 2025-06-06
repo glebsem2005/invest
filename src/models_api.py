@@ -2,6 +2,8 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Dict, List
 
+import aiolimiter
+
 from openai import AsyncOpenAI
 
 from config import Config
@@ -20,11 +22,33 @@ class ModelStrategy(ABC):
         ...
 
 
+import asyncio
+import logging
+from abc import ABC, abstractmethod
+from typing import Dict, List
+
+from openai import AsyncOpenAI
+from aiolimiter import AsyncLimiter
+
+from config import Config
+
+logger = logging.getLogger('bot')
+config = Config()
+
+
+class ModelStrategy(ABC):
+    """Абстрактный класс для стратегий взаимодействия с моделями."""
+    @abstractmethod
+    async def get_response(self, messages: List[Dict[str, str]]) -> str:
+        ...
+
+
 class ChatGPTStrategy(ModelStrategy):
-    """Стратегия для взаимодействия с ChatGPT через OpenAI API."""
+    """Стратегия для взаимодействия с ChatGPT через OpenAI API с лимитом запросов."""
+
+    _limiter = AsyncLimiter(max_rate=3, time_period=1.0)  # ⬅️ лимит: 3 запроса в секунду (настраивается)
 
     def __init__(self) -> None:
-        """Инициализирует клиент OpenAI с API-ключом из конфигурации."""
         self.client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
         self.model = config.OPENAI_MODEL
         logger.info(f'Инициализирована стратегия {self.__class__.__name__} с моделью {self.model}')
@@ -43,28 +67,36 @@ class ChatGPTStrategy(ModelStrategy):
         return '\n'.join(lines)
 
     async def get_response(self, messages: List[Dict[str, str]]) -> str:
-        """Отправляет запрос к ChatGPT и возвращает ответ."""
-        try:
-            logger.info(
-                f'[{self.__class__.__name__}] Отправка запроса, модель: {self.model}',
-            )
-            logger.debug(f'[{self.__class__.__name__}] {self._format_messages_for_log(messages)}')
+        """Отправляет запрос к ChatGPT с ограничением по частоте запросов и повторными попытками."""
+        logger.info(f'[{self.__class__.__name__}] Отправка запроса, модель: {self.model}')
+        logger.debug(f'[{self.__class__.__name__}] {self._format_messages_for_log(messages)}')
 
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                web_search_options={},  # COMMENT: только модель gpt-4o поддерживает поиск
-            )
+        for attempt in range(3):  # ⬅️ максимум 3 попытки при ошибке 429
+            try:
+                async with self._limiter:
+                    response = await self.client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        web_search_options={},  # поддерживается только gpt-4o
+                    )
 
-            content = response.choices[0].message.content.strip()
-            token_usage = response.usage.completion_tokens if hasattr(response, 'usage') else 'неизвестно'
-            logger.info(
-                f'[{self.__class__.__name__}] Получен ответ, длина: {len(content)} символов, использовано токенов: {token_usage}',
-            )
-            return content
-        except Exception as e:
-            logger.error(f'[{self.__class__.__name__}] Ошибка при запросе: {e}')
-            raise ValueError(f'Не удалось получить ответ от ChatGPT: {e}')
+                content = response.choices[0].message.content.strip()
+                token_usage = getattr(response.usage, 'completion_tokens', 'неизвестно')
+                logger.info(
+                    f'[{self.__class__.__name__}] Получен ответ, длина: {len(content)} символов, использовано токенов: {token_usage}'
+                )
+                return content
+
+            except Exception as e:
+                if '429' in str(e):
+                    wait = 2 ** attempt
+                    logger.warning(f'[{self.__class__.__name__}] Превышен лимит запросов, повтор через {wait}с...')
+                    await asyncio.sleep(wait)
+                else:
+                    logger.error(f'[{self.__class__.__name__}] Ошибка при запросе: {e}')
+                    raise ValueError(f'Не удалось получить ответ от ChatGPT: {e}')
+
+        raise RuntimeError("Слишком много попыток из-за превышения лимита")
 
 
 class ChatGPTFileStrategy(ModelStrategy):
