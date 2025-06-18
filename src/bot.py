@@ -2211,6 +2211,15 @@ class BotManager:
         self.bot = bot
         self.dp = dp
 
+        self.investment_analysis_scenario = { 
+            'investment_actions': InvestmentActionsHandler,    
+            'investment_qa': InvestmentQAHandler, 
+            'back_to_investment_actions': BackToInvestmentActionsHandler, 
+            'investment_report': InvestmentReportHandler, 
+            'email_input': EmailInputHandler, 
+        } 
+        logger.info(f"ПРИНУДИТЕЛЬНО определили investment_analysis_scenario: {list(self.investment_analysis_scenario.keys())}") 
+
         self._setup_middlewares()
 
         for scenario_name, scenario in self.main_scenario.items():
@@ -2235,6 +2244,11 @@ class BotManager:
 
         for scenario in self.scenarios.values():
             scenario.register(dp)
+
+        logger.info("НАЧИНАЕМ регистрацию investment_analysis_scenario") 
+        for scenario_name, scenario in self.investment_analysis_scenario.items():     
+            logger.info(f'Add for registering investment analysis handler: {scenario_name}') 
+            self._register_scenario(f'investment_{scenario_name}', scenario(bot))
 
     def _register_scenario(self, name: str, scenario: BaseScenario) -> None:
         self.scenarios[name] = scenario
