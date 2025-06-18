@@ -840,9 +840,6 @@ class BaseScenario(ABC):
             return None
 
 
-# Все остальные классы остаются без изменений...
-# [Здесь идут все остальные классы: Access, StartHandler, ProcessingChooseTopicCallback, и т.д.]
-
 class InvestmentActionsHandler(BaseScenario):
     """Обработка действий после получения executive summary."""
 
@@ -905,13 +902,19 @@ class InvestmentActionsHandler(BaseScenario):
             )
             await UserStates.INVESTMENT_REPORT_OPTIONS.set()
 
-    def register(self, dp: Dispatcher) -> None:
-        logger.info("Registering InvestmentActionsHandler")
+   def register(self, dp: Dispatcher) -> None:
+        logger.info("=== REGISTERING InvestmentActionsHandler ===")
+        logger.info(f"Dispatcher: {dp}")
+        logger.info(f"States to listen: {UserStates.INVESTMENT_ACTIONS}")
+        
+        # Регистрируем обработчик для всех инвестиционных действий
         dp.register_callback_query_handler(
             self.process,
             lambda c: c.data in ['investment_regenerate', 'investment_ask_question', 'investment_get_report'],
             state=UserStates.INVESTMENT_ACTIONS,
         )
+        
+        logger.info("=== InvestmentActionsHandler REGISTERED SUCCESSFULLY ===")
 
 
 class InvestmentQAHandler(BaseScenario):
@@ -970,6 +973,7 @@ class BackToInvestmentActionsHandler(BaseScenario):
     """Возврат к выбору действий инвестиционного анализа."""
 
     async def process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
+        logger.info(f"BackToInvestmentActionsHandler called by user {callback_query.from_user.id}")
         await callback_query.answer()
         await callback_query.message.edit_text(
             'Что бы вы хотели сделать дальше?',
@@ -978,12 +982,13 @@ class BackToInvestmentActionsHandler(BaseScenario):
         await UserStates.INVESTMENT_ACTIONS.set()
 
     def register(self, dp: Dispatcher) -> None:
-        logger.info("Registering BackToInvestmentActionsHandler")
+        logger.info("=== REGISTERING BackToInvestmentActionsHandler ===")
         dp.register_callback_query_handler(
             self.process,
             lambda c: c.data == 'back_to_investment_actions',
-            state='*',
+            state='*',  # Разрешаем из любого состояния
         )
+        logger.info("=== BackToInvestmentActionsHandler REGISTERED ===")
 
 
 class InvestmentReportHandler(BaseScenario):
@@ -994,6 +999,7 @@ class InvestmentReportHandler(BaseScenario):
         action = callback_query.data
         user_data = await state.get_data()
 
+        logger.info(f"InvestmentReportHandler: user {user_id}, action {action}")
         await callback_query.answer()
 
         if action == 'investment_download':
@@ -1043,13 +1049,13 @@ class InvestmentReportHandler(BaseScenario):
             await self.handle_error(callback_query.message, e, "report_generation")
 
     def register(self, dp: Dispatcher) -> None:
-        logger.info("Registering InvestmentReportHandler")
+        logger.info("=== REGISTERING InvestmentReportHandler ===")
         dp.register_callback_query_handler(
             self.process,
             lambda c: c.data in ['investment_download', 'investment_email', 'investment_back_to_actions'],
             state=UserStates.INVESTMENT_REPORT_OPTIONS,
         )
-
+        logger.info("=== InvestmentReportHandler REGISTERED ===")
 
 class EmailInputHandler(BaseScenario):
     """Обработка ввода email для отправки отчета."""
@@ -2211,6 +2217,7 @@ class BotManager:
         self.bot = bot
         self.dp = dp
 
+        # ВАЖНО: Создаем investment_analysis_scenario ПЕРЕД регистрацией
         self.investment_analysis_scenario = { 
             'investment_actions': InvestmentActionsHandler,    
             'investment_qa': InvestmentQAHandler, 
@@ -2218,40 +2225,43 @@ class BotManager:
             'investment_report': InvestmentReportHandler, 
             'email_input': EmailInputHandler, 
         } 
-        logger.info(f"ПРИНУДИТЕЛЬНО определили investment_analysis_scenario: {list(self.investment_analysis_scenario.keys())}") 
+        logger.info(f"Investment analysis scenario created: {list(self.investment_analysis_scenario.keys())}") 
 
         self._setup_middlewares()
 
-        for scenario_name, scenario in self.main_scenario.items():
-            logger.info(f'Add for registering handler: {scenario_name}')
-            self._register_scenario(scenario_name, scenario(bot))
+        # Регистрируем все сценарии в правильном порядке
+        all_scenarios = [
+            ('main', self.main_scenario),
+            ('investment', self.investment_analysis_scenario),  # ПЕРЕМЕЩЕНО ВВЕРХ
+            ('admin_update', self.admins_update_system_prompts_scenario),
+            ('admin_new', self.admin_new_system_prompts_scenario),
+            ('admin_scouting', self.admin_update_scouting_excel),
+            ('admin_common', self.admin_common_scenario),
+        ]
 
-        for scenario_name, scenario in self.admins_update_system_prompts_scenario.items():
-            logger.info(f'Add for registering admin update handler: {scenario_name}')
-            self._register_scenario(f'admin_update_{scenario_name}', scenario(bot))
+        # Создаем и регистрируем все сценарии
+        for scenario_group, scenarios in all_scenarios:
+            for scenario_name, scenario_class in scenarios.items():
+                full_name = f'{scenario_group}_{scenario_name}'
+                logger.info(f'Registering scenario: {full_name}')
+                scenario_instance = scenario_class(bot)
+                self._register_scenario(full_name, scenario_instance)
 
-        for scenario_name, scenario in self.admin_new_system_prompts_scenario.items():
-            logger.info(f'Add for registering admin new handler: {scenario_name}')
-            self._register_scenario(f'admin_new_{scenario_name}', scenario(bot))
+        # ВАЖНО: Вызываем register() для ВСЕХ сценариев после их создания
+        logger.info("Starting registration of all handlers...")
+        for scenario_name, scenario in self.scenarios.items():
+            logger.info(f'Calling register() for scenario: {scenario_name}')
+            try:
+                scenario.register(dp)
+                logger.info(f'Successfully registered: {scenario_name}')
+            except Exception as e:
+                logger.error(f'Failed to register {scenario_name}: {e}')
 
-        for scenario_name, scenario in self.admin_update_scouting_excel.items():
-            logger.info(f'Add for registering admin scouting excel handler: {scenario_name}')
-            self._register_scenario(f'admin_scouting_excel_{scenario_name}', scenario(bot))
-
-        for scenario_name, scenario in self.admin_common_scenario.items():
-            logger.info(f'Add for registering admin common handler: {scenario_name}')
-            self._register_scenario(f'admin_common_{scenario_name}', scenario(bot))
-
-        for scenario in self.scenarios.values():
-            scenario.register(dp)
-
-        logger.info("НАЧИНАЕМ регистрацию investment_analysis_scenario") 
-        for scenario_name, scenario in self.investment_analysis_scenario.items():     
-            logger.info(f'Add for registering investment analysis handler: {scenario_name}') 
-            self._register_scenario(f'investment_{scenario_name}', scenario(bot))
+        logger.info(f"Total scenarios registered: {len(self.scenarios)}")
 
     def _register_scenario(self, name: str, scenario: BaseScenario) -> None:
         self.scenarios[name] = scenario
+        logger.info(f'Scenario {name} added to scenarios dict')
 
     def _setup_middlewares(self) -> None:
         self.dp.middleware.setup(AccessMiddleware())
