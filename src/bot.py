@@ -902,7 +902,7 @@ class InvestmentActionsHandler(BaseScenario):
             )
             await UserStates.INVESTMENT_REPORT_OPTIONS.set()
 
-   def register(self, dp: Dispatcher) -> None:
+    def register(self, dp: Dispatcher) -> None:
         logger.info("=== REGISTERING InvestmentActionsHandler ===")
         logger.info(f"Dispatcher: {dp}")
         logger.info(f"States to listen: {UserStates.INVESTMENT_ACTIONS}")
