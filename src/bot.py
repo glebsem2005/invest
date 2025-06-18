@@ -346,40 +346,6 @@ class InvestmentAnalysisProcessor:
         logger.info(f"Using fallback result: {fallback_result}")
         return fallback_result
     
-    def _extract_company_manually(self, user_text: str) -> str:
-        """Простое извлечение названия компании из текста."""
-        logger.info(f"Manual extraction from text: '{user_text}'")
-        
-        # Список известных компаний для быстрого поиска
-        known_companies = [
-            "Apple", "Microsoft", "Google", "Amazon", "Meta", "Tesla", "Netflix", "Nvidia",
-            "Яндекс", "Сбер", "ВТБ", "Газпром", "Роснефть", "Лукойл", "МТС", "Мегафон",
-            "Ozon", "Wildberries", "Avito", "Mail.ru", "VK", "Тинькофф", "X5", "Сбербанк"
-        ]
-        
-        text_upper = user_text.upper()
-        for company in known_companies:
-            if company.upper() in text_upper:
-                logger.info(f"Found known company: {company}")
-                return company
-        
-        # Если не нашли известную компанию, ищем по паттернам
-        patterns = [
-            r'анализ\s+([А-Яа-яA-Za-z0-9]+)',
-            r'компани[я|и]\s+([А-Яа-яA-Za-z0-9]+)',
-            r'([А-Яа-яA-Za-z0-9]+)\s+компани',
-            r'([А-Яа-яA-Za-z0-9]{2,})',  # Любое слово длиннее 2 символов
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, user_text, re.IGNORECASE)
-            if match:
-                extracted = match.group(1)
-                logger.info(f"Extracted by pattern '{pattern}': {extracted}")
-                return extracted
-        
-        logger.warning("Could not extract company name, using default")
-        return "неизвестная_компания"
 
     async def run_analysis(self, analysis_params: Dict[str, Any], file_content: str = "") -> Dict[str, str]:
         """Запускает анализ на основе определенных параметров."""
@@ -398,8 +364,8 @@ class InvestmentAnalysisProcessor:
         if analysis_params.get("market", 0):
             try:
                 market_prompt_raw = system_prompts.get_prompt(SystemPrompt.INVESTMENT_MARKET)
-                market_prompt_data = json.loads(market_prompt_raw)
-                
+                market_prompt_data = market_prompt_raw
+
                 # Подставляем название компании в промпт
                 formatted_prompt = market_prompt_data["prompt"].replace("[название компании]", company_name)
                 full_prompt = formatted_prompt + additional_context
@@ -417,7 +383,7 @@ class InvestmentAnalysisProcessor:
         if analysis_params.get("rivals", 0):
             try:
                 rivals_prompt_raw = system_prompts.get_prompt(SystemPrompt.INVESTMENT_RIVALS)
-                rivals_prompt_data = json.loads(rivals_prompt_raw)
+                rivals_prompt_data = rivals_prompt_raw
                 
                 # Подставляем название компании в промпт
                 formatted_prompt = rivals_prompt_data["prompt"].replace("[название компании]", company_name)
@@ -436,7 +402,7 @@ class InvestmentAnalysisProcessor:
         if analysis_params.get("synergy", 0):
             try:
                 synergy_prompt_raw = system_prompts.get_prompt(SystemPrompt.INVESTMENT_SYNERGY)
-                synergy_prompt_data = json.loads(synergy_prompt_raw)
+                synergy_prompt_data = synergy_prompt_raw
                 
                 # Подставляем название компании в промпт
                 formatted_prompt = synergy_prompt_data["prompt"].replace("[название компании]", company_name)
