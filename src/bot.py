@@ -796,18 +796,18 @@ class InvestmentAnalysisProcessor:
     # Убираем пробелы в начале и конце
         sanitized = sanitized.strip()
     # Заменяем пробелы на подчеркивания
-    	sanitized = sanitized.replace(' ', '_')
+        sanitized = sanitized.replace(' ', '_')
     # Ограничиваем длину
-    	if len(sanitized) > 50:
-    	    sanitized = sanitized[:50]
+        if len(sanitized) > 50:
+            sanitized = sanitized[:50]
     # Убираем точки в конце (проблемы в Windows)
-   	sanitized = sanitized.rstrip('.')
+        sanitized = sanitized.rstrip('.')
     
     # Проверяем, что результат не пустой
-    	if not sanitized:
-          return 'unknown_company'
+	    if not sanitized:
+            return 'unknown_company'
         
-    	    return sanitized
+        return sanitized
 
 class BaseScenario(ABC):
     """Базовый класс для сценариев с общей логикой работы с запросами, файлами и ошибками."""
