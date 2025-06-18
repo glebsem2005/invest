@@ -1302,7 +1302,7 @@ class InvestmentReportHandler(BaseScenario):
             await UserStates.INVESTMENT_ACTIONS.set()
 
     async def _download_report(self, callback_query, state, user_data):
-    """Генерирует и отправляет отчет для скачивания."""
+        
         try:
             await callback_query.message.edit_text('📄 Генерирую финальный отчет...')
         
@@ -1369,7 +1369,7 @@ class EmailInputHandler(BaseScenario):
         self.email_sender = EmailSender()
 
     async def _download_report(self, callback_query, state, user_data):
-    """Генерирует и отправляет отчет для скачивания."""
+        """Генерирует и отправляет отчет для скачивания."""
         try:
             await callback_query.message.edit_text('📄 Генерирую финальный отчет...')
         
