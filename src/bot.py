@@ -794,7 +794,7 @@ class InvestmentAnalysisProcessor:
     # Убираем недопустимые символы для имени файла
         sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(filename))
     # Убираем пробелы в начале и конце
-    	sanitized = sanitized.strip()
+        sanitized = sanitized.strip()
     # Заменяем пробелы на подчеркивания
     	sanitized = sanitized.replace(' ', '_')
     # Ограничиваем длину
