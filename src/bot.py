@@ -615,19 +615,6 @@ class BaseScenario(ABC):
             return None
 
 
-# Все остальные классы остаются без изменений...
-# [Здесь идут все остальные классы: Access, StartHandler, ProcessingChooseTopicCallback, и т.д.]
-
-class Access(BaseScenario):
-    """Обработка получения доступа к боту."""
-
-    async def process(self, message: types.Message, state: FSMContext, **kwargs) -> NotImplemented:
-        raise NotImplementedError()
-
-    async def authorize_process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
-        admin_id = callback
-
-
 class Access(BaseScenario):
     """Обработка получения доступа к боту."""
 
