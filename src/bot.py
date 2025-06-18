@@ -48,7 +48,22 @@ class EmailSender:
         if not self.email_user or not self.email_password:
             logger.warning("Email credentials not configured. Email sending will not work.")
     
-    async def send_report(self, recipient_email: str, company_name: str, report_file_path: str) -> bool:
+    def _sanitize_filename(self, filename: str) -> str:
+        """Очищает имя файла от недопустимых символов."""
+        # Убираем недопустимые символы для имени файла
+        sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', filename)
+        # Убираем пробелы в начале и конце
+        sanitized = sanitized.strip()
+        # Заменяем пробелы на подчеркивания
+        sanitized = sanitized.replace(' ', '_')
+        # Ограничиваем длину
+        if len(sanitized) > 50:
+            sanitized = sanitized[:50]
+        # Убираем точки в конце (проблемы в Windows)
+        sanitized = sanitized.rstrip('.')
+        return sanitized or 'unknown_company'
+    
+    async def send_report(self, recipient_email: str, company_name: str, report_file_path: str, filename: str = None) -> bool:
         """Отправляет отчет на указанный email."""
         if not self.email_user or not self.email_password:
             logger.error("Email credentials not configured")
@@ -62,19 +77,7 @@ class EmailSender:
             msg['Subject'] = f"Инвестиционный анализ: {company_name}"
             
             # Текст письма
-            body = f"""Здравствуйте!
-
-Во вложении находится инвестиционный анализ компании {company_name}, сгенерированный нашей системой анализа.
-
-Отчет включает:
-- Рыночный анализ
-- Анализ конкурентов  
-- Анализ синергии
-- Дополнительные вопросы и ответы (если были заданы)
-
-С уважением,
-Команда Investment Analysis Bot
-"""
+            body = "Здравствуйте!"
             
             msg.attach(MIMEText(body, 'plain', 'utf-8'))
             
@@ -85,9 +88,22 @@ class EmailSender:
                     part.set_payload(attachment.read())
                 
                 encoders.encode_base64(part)
-                filename = f"investment_analysis_{company_name}.docx"
-                part.add_header('Content-Disposition', f'attachment; filename= "{filename}"')
+                
+                # Формируем безопасное имя файла
+                if filename:
+                    safe_filename = self._sanitize_filename(filename)
+                else:
+                    safe_company_name = self._sanitize_filename(company_name)
+                    safe_filename = f"investment_analysis_{safe_company_name}.docx"
+                
+                # Используем правильный заголовок без лишних пробелов
+                part.add_header(
+                    'Content-Disposition',
+                    f'attachment; filename="{safe_filename}"'
+                )
                 msg.attach(part)
+                
+                logger.info(f"Attached file with name: {safe_filename}")
             else:
                 logger.error(f"Report file not found: {report_file_path}")
                 return False
@@ -105,7 +121,7 @@ class EmailSender:
             
         except Exception as e:
             logger.error(f"Failed to send email to {recipient_email}: {e}")
-            return False
+            return Fals
 
 class UserStates(StatesGroup):
     ACCESS = State()
