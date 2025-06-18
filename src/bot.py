@@ -48,44 +48,44 @@ class EmailSender:
         if not self.email_user or not self.email_password:
             logger.warning("Email credentials not configured. Email sending will not work.")
     
-def _sanitize_filename(self, filename: str) -> str:
-    """Очищает имя файла от недопустимых символов."""
-    if not filename or not filename.strip():
-        return 'unknown_company'
+    def _sanitize_filename(self, filename: str) -> str:
+        """Очищает имя файла от недопустимых символов."""
+        if not filename or not filename.strip():
+            return 'unknown_company'
     
     # Убираем недопустимые символы для имени файла
-    sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(filename))
+        sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(filename))
     # Убираем пробелы в начале и конце
-    sanitized = sanitized.strip()
+        sanitized = sanitized.strip()
     # Заменяем пробелы на подчеркивания
-    sanitized = sanitized.replace(' ', '_')
+        sanitized = sanitized.replace(' ', '_')
     # Ограничиваем длину
-    if len(sanitized) > 50:
-        sanitized = sanitized[:50]
+        if len(sanitized) > 50:
+            sanitized = sanitized[:50]
     # Убираем точки в конце (проблемы в Windows)
-    sanitized = sanitized.rstrip('.')
+        sanitized = sanitized.rstrip('.')
     
     # Проверяем, что результат не пустой
-    if not sanitized:
-        return 'unknown_company'
+        if not sanitized:
+            return 'unknown_company'
         
-    return sanitized
+        return sanitized
 
-async def send_report(self, recipient_email: str, company_name: str, report_file_path: str, filename: str = None) -> bool:
-    """Отправляет отчет на указанный email."""
-    if not self.email_user or not self.email_password:
-        logger.error("Email credentials not configured")
-        return False
+    async def send_report(self, recipient_email: str, company_name: str, report_file_path: str, filename: str = None) -> bool:
+        """Отправляет отчет на указанный email."""
+        if not self.email_user or not self.email_password:
+            logger.error("Email credentials not configured")
+            return False
         
-    try:
+        try:
         # Создаем сообщение
-        msg = MIMEMultipart()
-        msg['From'] = f"{self.sender_name} <{self.email_user}>"
-        msg['To'] = recipient_email
-        msg['Subject'] = f"Инвестиционный анализ: {company_name}"
+            msg = MIMEMultipart()
+            msg['From'] = f"{self.sender_name} <{self.email_user}>"
+            msg['To'] = recipient_email
+            msg['Subject'] = f"Инвестиционный анализ: {company_name}"
         
         # Текст письма
-        body = f"""Здравствуйте!
+            body = f"""Здравствуйте!
 
 Высылаем вам результаты инвестиционного анализа компании "{company_name}".
 
@@ -97,53 +97,53 @@ async def send_report(self, recipient_email: str, company_name: str, report_file
 С уважением,
 Команда аналитиков"""
         
-        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+            msg.attach(MIMEText(body, 'plain', 'utf-8'))
         
         # Прикрепляем файл отчета
-        if os.path.exists(report_file_path):
-            with open(report_file_path, "rb") as attachment:
-                part = MIMEBase('application', 'octet-stream')
-                part.set_payload(attachment.read())
-            
-            encoders.encode_base64(part)
+            if os.path.exists(report_file_path):
+                with open(report_file_path, "rb") as attachment:
+                    part = MIMEBase('application', 'octet-stream')
+                    part.set_payload(attachment.read())
+  
+                encoders.encode_base64(part)
             
             # Формируем безопасное имя файла
-            if filename:
-                safe_filename = self._sanitize_filename(filename)
-            else:
-                safe_company_name = self._sanitize_filename(company_name)
-                safe_filename = f"investment_analysis_{safe_company_name}.docx"
+                if filename:
+                    safe_filename = self._sanitize_filename(filename)
+                else:
+                    safe_company_name = self._sanitize_filename(company_name)
+                    safe_filename = f"investment_analysis_{safe_company_name}.docx"
             
             # Убеждаемся что имя файла не пустое
-            if not safe_filename:
-                safe_filename = "investment_analysis_report.docx"
+                if not safe_filename:
+                    safe_filename = "investment_analysis_report.docx"
             
             # Используем правильный заголовок без лишних пробелов
-            part.add_header(
-                'Content-Disposition',
-                f'attachment; filename="{safe_filename}"'
-            )
-            msg.attach(part)
+                part.add_header(
+                    'Content-Disposition',
+                    f'attachment; filename="{safe_filename}"'
+                )
+                msg.attach(part)
             
-            logger.info(f"Attached file with name: {safe_filename}")
-        else:
-            logger.error(f"Report file not found: {report_file_path}")
-            return False
+                logger.info(f"Attached file with name: {safe_filename}")
+            else:
+                logger.error(f"Report file not found: {report_file_path}")
+                return False
         
         # Отправляем email
-        server = smtplib.SMTP(self.smtp_server, self.smtp_port)
-        server.starttls()
-        server.login(self.email_user, self.email_password)
-        text = msg.as_string()
-        server.sendmail(self.email_user, recipient_email, text)
-        server.quit()
+            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+            server.starttls()
+            server.login(self.email_user, self.email_password)
+            text = msg.as_string()
+            server.sendmail(self.email_user, recipient_email, text)
+            server.quit()
         
-        logger.info(f"Email successfully sent to {recipient_email}")
-        return True
+            logger.info(f"Email successfully sent to {recipient_email}")
+            return True
         
-    except Exception as e:
-        logger.error(f"Failed to send email to {recipient_email}: {e}")
-        return False
+        except Exception as e:
+            logger.error(f"Failed to send email to {recipient_email}: {e}")
+            return False
 
 class UserStates(StatesGroup):
     ACCESS = State()
@@ -153,7 +153,7 @@ class UserStates(StatesGroup):
     ATTACHING_FILE = State()  # Ожидание прикрепления файла
     UPLOADING_FILE = State()  # Загрузка файла
     ASKING_CONTINUE = State()  # Спрашиваем, есть ли еще вопросы
-    CONTINUE_DIALOG = State()  # Продолжение диалога с той же моделью и темой
+    CONTINUE_DIALOG = State()  # Продолжение диалога с той же моделью и темо
     ATTACHING_FILE_CONTINUE = State()  # Ожидание прикрепления файла при продолжении диалога
     UPLOADING_FILE_CONTINUE = State()  # Загрузка файла при продолжении диалога
     
