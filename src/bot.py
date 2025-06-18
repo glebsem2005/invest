@@ -786,6 +786,28 @@ class InvestmentAnalysisProcessor:
         
         # Добавляем отступ между параграфами
             doc.add_paragraph()
+    def _sanitize_filename(self, filename: str) -> str:
+        """Очищает имя файла от недопустимых символов."""
+        if not filename or not filename.strip():
+        return 'unknown_company'
+    
+    # Убираем недопустимые символы для имени файла
+       sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(filename))
+    # Убираем пробелы в начале и конце
+    	sanitized = sanitized.strip()
+    # Заменяем пробелы на подчеркивания
+    	sanitized = sanitized.replace(' ', '_')
+    # Ограничиваем длину
+    	if len(sanitized) > 50:
+    	    sanitized = sanitized[:50]
+    # Убираем точки в конце (проблемы в Windows)
+   	sanitized = sanitized.rstrip('.')
+    
+    # Проверяем, что результат не пустой
+    	if not sanitized:
+          return 'unknown_company'
+        
+    	    return sanitized
 
 class BaseScenario(ABC):
     """Базовый класс для сценариев с общей логикой работы с запросами, файлами и ошибками."""
@@ -794,7 +816,7 @@ class BaseScenario(ABC):
         self.bot = bot
 
     @abstractmethod
-    async def process(self, message: types.Message, state: FSMContext, **kwargs) -> Any:
+    async def process(self, *args, **kwargs) -> Any:  # Изменили сигнатуру на более гибкую
         pass
 
     @abstractmethod
@@ -1118,7 +1140,19 @@ class BaseScenario(ABC):
 class InvestmentActionsHandler(BaseScenario):
     """Обработка действий после получения executive summary."""
 
-    async def process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
+    async def process(self, *args, **kwargs) -> None:  # Обновленная сигнатура
+        # Извлекаем callback_query и state из args или kwargs
+        if args:
+            callback_query = args[0]
+            state = args[1] if len(args) > 1 else kwargs.get('state')
+        else:
+            callback_query = kwargs.get('callback_query')
+            state = kwargs.get('state')
+            
+        if not callback_query or not state:
+            logger.error("InvestmentActionsHandler: missing callback_query or state parameter")
+            return
+
         user_id = callback_query.from_user.id
         action = callback_query.data
         user_data = await state.get_data()
@@ -1179,23 +1213,32 @@ class InvestmentActionsHandler(BaseScenario):
 
     def register(self, dp: Dispatcher) -> None:
         logger.info("=== REGISTERING InvestmentActionsHandler ===")
-        logger.info(f"Dispatcher: {dp}")
-        logger.info(f"States to listen: {UserStates.INVESTMENT_ACTIONS}")
         
         # Регистрируем обработчик для всех инвестиционных действий
         dp.register_callback_query_handler(
-            self.process,
+            lambda c, state: self.process(c, state),  # Оборачиваем в lambda
             lambda c: c.data in ['investment_regenerate', 'investment_ask_question', 'investment_get_report'],
             state=UserStates.INVESTMENT_ACTIONS,
         )
         
         logger.info("=== InvestmentActionsHandler REGISTERED SUCCESSFULLY ===")
 
-
 class InvestmentQAHandler(BaseScenario):
     """Обработка вопросов-ответов в режиме инвестиционного анализа."""
 
-    async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
+    async def process(self, *args, **kwargs) -> None:  # Обновленная сигнатура
+        # Извлекаем message и state из args или kwargs
+        if args:
+            message = args[0]
+            state = args[1] if len(args) > 1 else kwargs.get('state')
+        else:
+            message = kwargs.get('message')
+            state = kwargs.get('state')
+            
+        if not message or not state:
+            logger.error("InvestmentQAHandler: missing message or state parameter")
+            return
+
         user_id = message.from_user.id
         user_data = await state.get_data()
         user_question = message.text
@@ -1205,7 +1248,6 @@ class InvestmentQAHandler(BaseScenario):
 
         try:
             # Простой промпт только с названием компании и текущим вопросом
-            # БЕЗ контекста из executive summary и предыдущих вопросов
             model_api = ModelAPI(Models.chatgpt.value())
             messages = [
                 {"role": "system", "content": f"Ты эксперт по инвестиционному анализу. Ответь на вопрос по компании {company_name}. Будь конкретным и профессиональным."},
@@ -1238,7 +1280,7 @@ class InvestmentQAHandler(BaseScenario):
 
     def register(self, dp: Dispatcher) -> None:
         dp.register_message_handler(
-            self.process,
+            lambda message, state: self.process(message, state),  # Оборачиваем в lambda
             content_types=['text'],
             state=UserStates.INVESTMENT_QA,
         )
@@ -1247,7 +1289,19 @@ class InvestmentQAHandler(BaseScenario):
 class BackToInvestmentActionsHandler(BaseScenario):
     """Возврат к выбору действий инвестиционного анализа."""
 
-    async def process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
+    async def process(self, *args, **kwargs) -> None:  # Обновленная сигнатура
+        # Извлекаем callback_query и state из args или kwargs
+        if args:
+            callback_query = args[0]
+            state = args[1] if len(args) > 1 else kwargs.get('state')
+        else:
+            callback_query = kwargs.get('callback_query')
+            state = kwargs.get('state')
+            
+        if not callback_query or not state:
+            logger.error("BackToInvestmentActionsHandler: missing callback_query or state parameter")
+            return
+
         logger.info(f"BackToInvestmentActionsHandler called by user {callback_query.from_user.id}")
         await callback_query.answer()
         await callback_query.message.edit_text(
@@ -1259,11 +1313,12 @@ class BackToInvestmentActionsHandler(BaseScenario):
     def register(self, dp: Dispatcher) -> None:
         logger.info("=== REGISTERING BackToInvestmentActionsHandler ===")
         dp.register_callback_query_handler(
-            self.process,
+            lambda c, state: self.process(c, state),  # Оборачиваем в lambda
             lambda c: c.data == 'back_to_investment_actions',
             state='*',  # Разрешаем из любого состояния
         )
         logger.info("=== BackToInvestmentActionsHandler REGISTERED ===")
+
 
 
 class InvestmentReportHandler(BaseScenario):
@@ -1273,7 +1328,19 @@ class InvestmentReportHandler(BaseScenario):
         super().__init__(bot)
         self.email_sender = EmailSender()
 
-    async def process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
+    async def process(self, *args, **kwargs) -> None:  # Обновленная сигнатура
+        # Извлекаем callback_query и state из args или kwargs
+        if args:
+            callback_query = args[0]
+            state = args[1] if len(args) > 1 else kwargs.get('state')
+        else:
+            callback_query = kwargs.get('callback_query')
+            state = kwargs.get('state')
+            
+        if not callback_query or not state:
+            logger.error("InvestmentReportHandler: missing callback_query or state parameter")
+            return
+
         user_id = callback_query.from_user.id
         action = callback_query.data
         user_data = await state.get_data()
@@ -1302,64 +1369,54 @@ class InvestmentReportHandler(BaseScenario):
             await UserStates.INVESTMENT_ACTIONS.set()
 
     async def _download_report(self, callback_query, state, user_data):
-        
+        """Генерирует и отправляет отчет для скачивания."""
         try:
             await callback_query.message.edit_text('📄 Генерирую финальный отчет...')
-        
+            
             processor = InvestmentAnalysisProcessor()
             company_name = user_data.get('company_name', 'unknown_company')
             analysis_results = user_data.get('analysis_results')
             qa_history = user_data.get('qa_history', [])
-        
-        # Создаем обновленный отчет с Q&A
+            
+            # Создаем обновленный отчет с Q&A
             final_report_path = await processor.create_final_report_with_qa(
                 company_name, analysis_results, qa_history
             )
-        
-        # Формируем корректное имя файла
-            safe_company_name = processor._sanitize_filename(company_name)  # Используем метод из processor
+            
+            # Формируем корректное имя файла
+            safe_company_name = processor._sanitize_filename(company_name)
             if not safe_company_name:
                 safe_company_name = "unknown_company"
             report_filename = f'investment_analysis_{safe_company_name}_final.docx'
-        
-        # Отправляем файл
+            
+            # Отправляем файл
             with open(final_report_path, 'rb') as doc_file:
                 await callback_query.message.answer_document(
                     document=types.InputFile(doc_file, filename=report_filename),
                     caption=f'📋 Финальный отчет по инвестиционному анализу: {company_name}'
-            )
-        
-        # Удаляем временный файл
+                )
+            
+            # Удаляем временный файл
             os.unlink(final_report_path)
-        
+            
             await callback_query.message.answer(
                 'Отчет готов! Что бы вы хотели сделать дальше?',
                 reply_markup=InvestmentActionsKeyboard()
             )
             await UserStates.INVESTMENT_ACTIONS.set()
-        
+            
         except Exception as e:
             await self.handle_error(callback_query.message, e, "report_generation")
-
-    def _sanitize_filename(self, filename):
-        """Очищает имя файла от недопустимых символов."""
-        import re
-        # Убираем недопустимые символы для имени файла
-        sanitized = re.sub(r'[<>:"/\\|?*]', '_', filename)
-        # Убираем пробелы в начале и конце
-        sanitized = sanitized.strip()
-        # Заменяем пробелы на подчеркивания
-        sanitized = sanitized.replace(' ', '_')
-        return sanitized
 
     def register(self, dp: Dispatcher) -> None:
         logger.info("=== REGISTERING InvestmentReportHandler ===")
         dp.register_callback_query_handler(
-            self.process,
+            lambda c, state: self.process(c, state),  # Оборачиваем в lambda
             lambda c: c.data in ['investment_download', 'investment_email', 'investment_back_to_actions'],
             state=UserStates.INVESTMENT_REPORT_OPTIONS,
         )
         logger.info("=== InvestmentReportHandler REGISTERED ===")
+
 
 class EmailInputHandler(BaseScenario):
     """Обработка ввода email для отправки отчета."""
@@ -1368,61 +1425,76 @@ class EmailInputHandler(BaseScenario):
         super().__init__(bot)
         self.email_sender = EmailSender()
 
-    async def _download_report(self, callback_query, state, user_data):
-        """Генерирует и отправляет отчет для скачивания."""
-        try:
-            await callback_query.message.edit_text('📄 Генерирую финальный отчет...')
+    async def process(self, *args, **kwargs) -> None:  # Обновленная сигнатура
+        # Извлекаем message и state из args или kwargs
+        if args:
+            message = args[0]
+            state = args[1] if len(args) > 1 else kwargs.get('state')
+        else:
+            message = kwargs.get('message')
+            state = kwargs.get('state')
+            
+        if not message or not state:
+            logger.error("EmailInputHandler: missing message or state parameter")
+            return
+            
+        email = message.text.strip()
+        user_data = await state.get_data()
         
+        # Простая валидация email
+        if '@' not in email or '.' not in email:
+            await message.answer('❌ Некорректный email. Введите правильный email:')
+            return
+        
+        try:
+            await message.answer('📧 Генерирую и отправляю отчет на почту...')
+            
             processor = InvestmentAnalysisProcessor()
             company_name = user_data.get('company_name', 'unknown_company')
             analysis_results = user_data.get('analysis_results')
             qa_history = user_data.get('qa_history', [])
-        
-        # Создаем обновленный отчет с Q&A
+            
+            # Создаем финальный отчет
             final_report_path = await processor.create_final_report_with_qa(
                 company_name, analysis_results, qa_history
             )
-        
-        # Формируем корректное имя файла
-            safe_company_name = processor._sanitize_filename(company_name)  # Используем метод из processor
+            
+            # Формируем корректное имя файла
+            safe_company_name = processor._sanitize_filename(company_name)
             if not safe_company_name:
                 safe_company_name = "unknown_company"
             report_filename = f'investment_analysis_{safe_company_name}_final.docx'
-        
-        # Отправляем файл
-            with open(final_report_path, 'rb') as doc_file:
-                await callback_query.message.answer_document(
-                    document=types.InputFile(doc_file, filename=report_filename),
-                caption=f'📋 Финальный отчет по инвестиционному анализу: {company_name}'
-                )
-        
-        # Удаляем временный файл
-            os.unlink(final_report_path)
-        
-            await callback_query.message.answer(
-                'Отчет готов! Что бы вы хотели сделать дальше?',
+            
+            # Отправляем на email с корректным именем файла
+            success = await self.email_sender.send_report(
+                email, 
+                company_name, 
+                final_report_path,
+                filename=report_filename
+            )
+            
+            # Удаляем временный файл
+            if os.path.exists(final_report_path):
+                os.unlink(final_report_path)
+            
+            if success:
+                await message.answer(f'✅ Отчет успешно отправлен на {email}')
+            else:
+                await message.answer(f'❌ Не удалось отправить отчет на {email}. Попробуйте скачать отчет.')
+            
+            await message.answer(
+                'Что бы вы хотели сделать дальше?',
                 reply_markup=InvestmentActionsKeyboard()
             )
             await UserStates.INVESTMENT_ACTIONS.set()
-        
+            
         except Exception as e:
-            await self.handle_error(callback_query.message, e, "report_generation")
-
-    def _sanitize_filename(self, filename):
-        """Очищает имя файла от недопустимых символов."""
-        import re
-        # Убираем недопустимые символы для имени файла
-        sanitized = re.sub(r'[<>:"/\\|?*]', '_', filename)
-        # Убираем пробелы в начале и конце
-        sanitized = sanitized.strip()
-        # Заменяем пробелы на подчеркивания
-        sanitized = sanitized.replace(' ', '_')
-        return sanitized
+            await self.handle_error(message, e, "email_sending")
 
     def register(self, dp: Dispatcher) -> None:
         logger.info("=== REGISTERING EmailInputHandler ===")
         dp.register_message_handler(
-            self.process,
+            lambda message, state: self.process(message, state),  # Оборачиваем в lambda
             content_types=['text'],
             state=UserStates.ENTERING_EMAIL,
         )
