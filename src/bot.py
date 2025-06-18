@@ -48,80 +48,102 @@ class EmailSender:
         if not self.email_user or not self.email_password:
             logger.warning("Email credentials not configured. Email sending will not work.")
     
-    def _sanitize_filename(self, filename: str) -> str:
-        """Очищает имя файла от недопустимых символов."""
-        # Убираем недопустимые символы для имени файла
-        sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', filename)
-        # Убираем пробелы в начале и конце
-        sanitized = sanitized.strip()
-        # Заменяем пробелы на подчеркивания
-        sanitized = sanitized.replace(' ', '_')
-        # Ограничиваем длину
-        if len(sanitized) > 50:
-            sanitized = sanitized[:50]
-        # Убираем точки в конце (проблемы в Windows)
-        sanitized = sanitized.rstrip('.')
-        return sanitized or 'unknown_company'
+def _sanitize_filename(self, filename: str) -> str:
+    """Очищает имя файла от недопустимых символов."""
+    if not filename or not filename.strip():
+        return 'unknown_company'
     
-    async def send_report(self, recipient_email: str, company_name: str, report_file_path: str, filename: str = None) -> bool:
-        """Отправляет отчет на указанный email."""
-        if not self.email_user or not self.email_password:
-            logger.error("Email credentials not configured")
-            return False
+    # Убираем недопустимые символы для имени файла
+    sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(filename))
+    # Убираем пробелы в начале и конце
+    sanitized = sanitized.strip()
+    # Заменяем пробелы на подчеркивания
+    sanitized = sanitized.replace(' ', '_')
+    # Ограничиваем длину
+    if len(sanitized) > 50:
+        sanitized = sanitized[:50]
+    # Убираем точки в конце (проблемы в Windows)
+    sanitized = sanitized.rstrip('.')
+    
+    # Проверяем, что результат не пустой
+    if not sanitized:
+        return 'unknown_company'
+        
+    return sanitized
+
+async def send_report(self, recipient_email: str, company_name: str, report_file_path: str, filename: str = None) -> bool:
+    """Отправляет отчет на указанный email."""
+    if not self.email_user or not self.email_password:
+        logger.error("Email credentials not configured")
+        return False
+        
+    try:
+        # Создаем сообщение
+        msg = MIMEMultipart()
+        msg['From'] = f"{self.sender_name} <{self.email_user}>"
+        msg['To'] = recipient_email
+        msg['Subject'] = f"Инвестиционный анализ: {company_name}"
+        
+        # Текст письма
+        body = f"""Здравствуйте!
+
+Высылаем вам результаты инвестиционного анализа компании "{company_name}".
+
+Отчет содержит:
+- Анализ рынка и конкурентов
+- Оценку инвестиционной привлекательности  
+- Рекомендации по взаимодействию
+
+С уважением,
+Команда аналитиков"""
+        
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        
+        # Прикрепляем файл отчета
+        if os.path.exists(report_file_path):
+            with open(report_file_path, "rb") as attachment:
+                part = MIMEBase('application', 'octet-stream')
+                part.set_payload(attachment.read())
             
-        try:
-            # Создаем сообщение
-            msg = MIMEMultipart()
-            msg['From'] = f"{self.sender_name} <{self.email_user}>"
-            msg['To'] = recipient_email
-            msg['Subject'] = f"Инвестиционный анализ: {company_name}"
+            encoders.encode_base64(part)
             
-            # Текст письма
-            body = "Здравствуйте!"
-            
-            msg.attach(MIMEText(body, 'plain', 'utf-8'))
-            
-            # Прикрепляем файл отчета
-            if os.path.exists(report_file_path):
-                with open(report_file_path, "rb") as attachment:
-                    part = MIMEBase('application', 'octet-stream')
-                    part.set_payload(attachment.read())
-                
-                encoders.encode_base64(part)
-                
-                # Формируем безопасное имя файла
-                if filename:
-                    safe_filename = self._sanitize_filename(filename)
-                else:
-                    safe_company_name = self._sanitize_filename(company_name)
-                    safe_filename = f"investment_analysis_{safe_company_name}.docx"
-                
-                # Используем правильный заголовок без лишних пробелов
-                part.add_header(
-                    'Content-Disposition',
-                    f'attachment; filename="{safe_filename}"'
-                )
-                msg.attach(part)
-                
-                logger.info(f"Attached file with name: {safe_filename}")
+            # Формируем безопасное имя файла
+            if filename:
+                safe_filename = self._sanitize_filename(filename)
             else:
-                logger.error(f"Report file not found: {report_file_path}")
-                return False
+                safe_company_name = self._sanitize_filename(company_name)
+                safe_filename = f"investment_analysis_{safe_company_name}.docx"
             
-            # Отправляем email
-            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
-            server.starttls()
-            server.login(self.email_user, self.email_password)
-            text = msg.as_string()
-            server.sendmail(self.email_user, recipient_email, text)
-            server.quit()
+            # Убеждаемся что имя файла не пустое
+            if not safe_filename:
+                safe_filename = "investment_analysis_report.docx"
             
-            logger.info(f"Email successfully sent to {recipient_email}")
-            return True
+            # Используем правильный заголовок без лишних пробелов
+            part.add_header(
+                'Content-Disposition',
+                f'attachment; filename="{safe_filename}"'
+            )
+            msg.attach(part)
             
-        except Exception as e:
-            logger.error(f"Failed to send email to {recipient_email}: {e}")
-            return Fals
+            logger.info(f"Attached file with name: {safe_filename}")
+        else:
+            logger.error(f"Report file not found: {report_file_path}")
+            return False
+        
+        # Отправляем email
+        server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+        server.starttls()
+        server.login(self.email_user, self.email_password)
+        text = msg.as_string()
+        server.sendmail(self.email_user, recipient_email, text)
+        server.quit()
+        
+        logger.info(f"Email successfully sent to {recipient_email}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to send email to {recipient_email}: {e}")
+        return False
 
 class UserStates(StatesGroup):
     ACCESS = State()
@@ -639,68 +661,131 @@ class InvestmentAnalysisProcessor:
     async def create_final_report_with_qa(self, company_name: str, analysis_results: Dict[str, str], qa_history: list) -> str:
         """Создает финальный отчет с интегрированными Q&A."""
         try:
-            # Сначала создаем базовый отчет
-            base_report_path = self.create_docx_report(company_name, analysis_results)
+        # Создаем новый документ
+            doc = Document()
+        
+        # Заголовок
+            title = doc.add_heading(f'Инвестиционный анализ: {company_name}', 0)
+            title.alignment = 1  # Выравнивание по центру
+        
+        # Дата создания отчета
+            from datetime import datetime
+            date_paragraph = doc.add_paragraph(f'Дата создания отчета: {datetime.now().strftime("%d.%m.%Y")}')
+            date_paragraph.alignment = 1  # Выравнивание по центру
+        
+            doc.add_page_break()
+        
+        # Добавляем результаты анализов с улучшенным форматированием
+            if "market" in analysis_results:
+                doc.add_heading('1. Рыночный анализ', level=1)
+                self._add_formatted_content(doc, analysis_results["market"])
+                doc.add_page_break()
+        
+            if "rivals" in analysis_results:
+                doc.add_heading('2. Анализ конкурентов', level=1)
+                self._add_formatted_content(doc, analysis_results["rivals"])
+                doc.add_page_break()
+        
+            if "synergy" in analysis_results:
+                doc.add_heading('3. Анализ синергии', level=1)
+                self._add_formatted_content(doc, analysis_results["synergy"])
             
-            if not qa_history:
-                # Если нет Q&A, возвращаем базовый отчет
-                return base_report_path
+                if qa_history:  # Добавляем разрыв страницы только если есть Q&A
+                    doc.add_page_break()
+        
+        # Добавляем Q&A секцию если есть вопросы
+            if qa_history:
+                doc.add_heading('4. Дополнительные вопросы и ответы', level=1)
             
-            # Читаем базовый отчет
-            doc = Document(base_report_path)
-            original_content = ""
-            for paragraph in doc.paragraphs:
-                original_content += paragraph.text + "\n"
-            
-            # Форматируем Q&A
-            qa_content = ""
-            for i, qa in enumerate(qa_history, 1):
-                qa_content += f"Вопрос {i}: {qa['question']}\nОтвет {i}: {qa['answer']}\n\n"
-            
-            # Используем недорогую модель для интеграции Q&A
-            model_api = ModelAPI(Models.chatgpt.value())  # Можно заменить на более дешевую модель
-            messages = [
-                {"role": "system", "content": "Ты помощник для интеграции Q&A в отчеты. Работай быстро и эффективно."},
-                {"role": "user", "content": self.qa_integration_prompt.format(
-                    original_report=original_content,
-                    qa_content=qa_content
-                )}
-            ]
-            
-            integrated_content = await model_api.get_response(messages)
-            
-            # Создаем новый документ с интегрированным содержимым
-            final_doc = Document()
-            final_doc.add_heading(f'Финальный анализ инвестиционной привлекательности: {company_name}', 0)
-            
-            # Разбиваем содержимое на абзацы и добавляем
-            paragraphs = integrated_content.split('\n')
-            for paragraph in paragraphs:
-                if paragraph.strip():
-                    if paragraph.startswith('#'):
-                        # Заголовок
-                        level = paragraph.count('#')
-                        title = paragraph.replace('#', '').strip()
-                        final_doc.add_heading(title, level=min(level, 3))
-                    else:
-                        final_doc.add_paragraph(paragraph.strip())
-            
-            # Сохраняем финальный отчет
-            final_file = tempfile.NamedTemporaryFile(delete=False, suffix='_final.docx')
-            final_doc.save(final_file.name)
-            final_file.close()
-            
-            # Удаляем базовый отчет
-            os.unlink(base_report_path)
-            
-            logger.info(f"Final report with Q&A created: {final_file.name}")
-            return final_file.name
-            
+                for i, qa in enumerate(qa_history, 1):
+                # Добавляем вопрос
+                    question_para = doc.add_paragraph()
+                    question_run = question_para.add_run(f"Вопрос {i}: ")
+                    question_run.bold = True
+                    question_para.add_run(qa['question'])
+                
+                # Добавляем ответ
+                    answer_para = doc.add_paragraph()
+                    answer_run = answer_para.add_run("Ответ: ")
+                    answer_run.bold = True
+                    self._add_formatted_content(doc, qa['answer'], is_sub_content=True)
+                
+                # Добавляем отступ между Q&A парами
+                    if i < len(qa_history):
+                        doc.add_paragraph()
+        
+        # Сохраняем во временный файл
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='_final.docx')
+            doc.save(temp_file.name)
+            temp_file.close()
+        
+            logger.info(f"Final report with Q&A created: {temp_file.name}")
+            return temp_file.name
+        
         except Exception as e:
             logger.error(f"Error creating final report with Q&A: {e}")
-            # В случае ошибки возвращаем базовый отчет
+        # В случае ошибки возвращаем базовый отчет
             return self.create_docx_report(company_name, analysis_results)
 
+    def _add_formatted_content(self, doc, content: str, is_sub_content: bool = False):
+        """Добавляет форматированный контент в документ."""
+        if not content:
+            return
+        
+    # Разбиваем контент на параграфы
+        paragraphs = content.split('\n\n')
+    
+        for para_text in paragraphs:
+            if not para_text.strip():
+                continue
+            
+            lines = para_text.strip().split('\n')
+        
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                
+            # Проверяем, является ли строка заголовком
+                if line.startswith('##'):
+                # Подзаголовок уровня 2
+                    heading_text = line.replace('##', '').strip()
+                    if heading_text:
+                        doc.add_heading(heading_text, level=2)
+                elif line.startswith('#'):
+                # Подзаголовок уровня 1 
+                    heading_text = line.replace('#', '').strip()
+                    if heading_text:
+                        doc.add_heading(heading_text, level=2 if is_sub_content else 1)
+                elif line.startswith('**') and line.endswith('**'):
+                # Жирный текст как отдельный параграф
+                    para = doc.add_paragraph()
+                    run = para.add_run(line.replace('**', ''))
+                    run.bold = True
+                elif line.startswith('- ') or line.startswith('* '):
+                # Маркированный список
+                    bullet_text = line[2:].strip()
+                    if bullet_text:
+                        para = doc.add_paragraph(bullet_text, style='List Bullet')
+                elif line[0].isdigit() and '. ' in line:
+                # Нумерованный список
+                    numbered_text = line.split('. ', 1)[1] if '. ' in line else line
+                    if numbered_text:
+                        para = doc.add_paragraph(numbered_text, style='List Number')
+                else:
+                # Обычный параграф
+                    para = doc.add_paragraph()
+                
+                # Обрабатываем жирный текст внутри параграфа
+                    parts = line.split('**')
+                    for i, part in enumerate(parts):
+                        if part:
+                            run = para.add_run(part)
+                            if i % 2 == 1:  # Нечетные части - жирные
+                                run.bold = True
+        
+        # Добавляем отступ между параграфами
+            doc.add_paragraph()
 
 class BaseScenario(ABC):
     """Базовый класс для сценариев с общей логикой работы с запросами, файлами и ошибками."""
@@ -1217,40 +1302,42 @@ class InvestmentReportHandler(BaseScenario):
             await UserStates.INVESTMENT_ACTIONS.set()
 
     async def _download_report(self, callback_query, state, user_data):
-        """Генерирует и отправляет отчет для скачивания."""
+    """Генерирует и отправляет отчет для скачивания."""
         try:
             await callback_query.message.edit_text('📄 Генерирую финальный отчет...')
-            
+        
             processor = InvestmentAnalysisProcessor()
             company_name = user_data.get('company_name', 'unknown_company')
             analysis_results = user_data.get('analysis_results')
             qa_history = user_data.get('qa_history', [])
-            
-            # Создаем обновленный отчет с Q&A
+        
+        # Создаем обновленный отчет с Q&A
             final_report_path = await processor.create_final_report_with_qa(
                 company_name, analysis_results, qa_history
             )
-            
-            # Формируем корректное имя файла
-            safe_company_name = self._sanitize_filename(company_name)
+        
+        # Формируем корректное имя файла
+            safe_company_name = processor._sanitize_filename(company_name)  # Используем метод из processor
+            if not safe_company_name:
+                safe_company_name = "unknown_company"
             report_filename = f'investment_analysis_{safe_company_name}_final.docx'
-            
-            # Отправляем файл
+        
+        # Отправляем файл
             with open(final_report_path, 'rb') as doc_file:
                 await callback_query.message.answer_document(
                     document=types.InputFile(doc_file, filename=report_filename),
-                    caption='📋 Финальный отчет по инвестиционному анализу'
-                )
-            
-            # Удаляем временный файл
+                    caption=f'📋 Финальный отчет по инвестиционному анализу: {company_name}'
+            )
+        
+        # Удаляем временный файл
             os.unlink(final_report_path)
-            
+        
             await callback_query.message.answer(
                 'Отчет готов! Что бы вы хотели сделать дальше?',
                 reply_markup=InvestmentActionsKeyboard()
             )
             await UserStates.INVESTMENT_ACTIONS.set()
-            
+        
         except Exception as e:
             await self.handle_error(callback_query.message, e, "report_generation")
 
@@ -1281,57 +1368,45 @@ class EmailInputHandler(BaseScenario):
         super().__init__(bot)
         self.email_sender = EmailSender()
 
-    async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
-        email = message.text.strip()
-        user_data = await state.get_data()
-        
-        # Простая валидация email
-        if '@' not in email or '.' not in email:
-            await message.answer('❌ Некорректный email. Введите правильный email:')
-            return
-        
+    async def _download_report(self, callback_query, state, user_data):
+    """Генерирует и отправляет отчет для скачивания."""
         try:
-            await message.answer('📧 Генерирую и отправляю отчет на почту...')
-            
+            await callback_query.message.edit_text('📄 Генерирую финальный отчет...')
+        
             processor = InvestmentAnalysisProcessor()
             company_name = user_data.get('company_name', 'unknown_company')
             analysis_results = user_data.get('analysis_results')
             qa_history = user_data.get('qa_history', [])
-            
-            # Создаем финальный отчет
+        
+        # Создаем обновленный отчет с Q&A
             final_report_path = await processor.create_final_report_with_qa(
                 company_name, analysis_results, qa_history
             )
-            
-            # Формируем корректное имя файла
-            safe_company_name = self._sanitize_filename(company_name)
+        
+        # Формируем корректное имя файла
+            safe_company_name = processor._sanitize_filename(company_name)  # Используем метод из processor
+            if not safe_company_name:
+                safe_company_name = "unknown_company"
             report_filename = f'investment_analysis_{safe_company_name}_final.docx'
-            
-            # Отправляем на email с корректным именем файла
-            success = await self.email_sender.send_report(
-                email, 
-                company_name, 
-                final_report_path,
-                filename=report_filename  # Передаем желаемое имя файла
-            )
-            
-            # Удаляем временный файл
-            if os.path.exists(final_report_path):
-                os.unlink(final_report_path)
-            
-            if success:
-                await message.answer(f'✅ Отчет успешно отправлен на {email}')
-            else:
-                await message.answer(f'❌ Не удалось отправить отчет на {email}. Попробуйте скачать отчет.')
-            
-            await message.answer(
-                'Что бы вы хотели сделать дальше?',
+        
+        # Отправляем файл
+            with open(final_report_path, 'rb') as doc_file:
+                await callback_query.message.answer_document(
+                    document=types.InputFile(doc_file, filename=report_filename),
+                caption=f'📋 Финальный отчет по инвестиционному анализу: {company_name}'
+                )
+        
+        # Удаляем временный файл
+            os.unlink(final_report_path)
+        
+            await callback_query.message.answer(
+                'Отчет готов! Что бы вы хотели сделать дальше?',
                 reply_markup=InvestmentActionsKeyboard()
             )
             await UserStates.INVESTMENT_ACTIONS.set()
-            
+        
         except Exception as e:
-            await self.handle_error(message, e, "email_sending")
+            await self.handle_error(callback_query.message, e, "report_generation")
 
     def _sanitize_filename(self, filename):
         """Очищает имя файла от недопустимых символов."""
@@ -2532,4 +2607,5 @@ if __name__ == '__main__':
     BotManager(bot, dp)
 
     executor.start_polling(dp, skip_updates=True)
+
 
