@@ -2,8 +2,13 @@ import html
 import logging
 import re
 import traceback
+import json
+import os
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Tuple
+from docx import Document
+from docx.shared import Inches
+import tempfile
 
 import aiogram.utils.exceptions
 from aiogram import Bot, Dispatcher, executor, types
@@ -118,6 +123,178 @@ class PromptTypeKeyboard(Keyboard):
     )
 
 
+class InvestmentAnalysisProcessor:
+    """Класс для обработки анализа инвестиционной привлекательности."""
+    
+    def __init__(self):
+        self.analysis_prompt = """
+Проанализируй текст и определи название компании и типы анализа, которые нужно провести.
+Верни ответ в формате JSON: {"name": "название_компании", "market": 0/1, "rivals": 0/1, "synergy": 0/1}
+
+Правила определения:
+- market (рыночный анализ): 1 если упоминаются рынок, размер рынка, сегменты, позиция на рынке, финансы, финансовые показатели
+- rivals (анализ конкурентов): 1 если упоминаются конкуренты, сравнение, преимущества, недостатки
+- synergy (синергия): 1 если упоминается синергия, совместная работа, партнерство, интеграция
+
+Если явно не указан тип анализа или просто название компании, установи все значения в 1.
+
+Текст: {user_text}
+"""
+        
+        self.executive_summary_prompt = """
+На основе проведенного анализа инвестиционной привлекательности компании составь executive summary.
+Анализ содержится в прикрепленном документе.
+
+Требования к executive summary:
+1. Краткое описание компании (1-2 абзаца)
+2. Ключевые выводы по инвестиционной привлекательности
+3. Основные риски и возможности
+4. Рекомендации по инвестированию
+5. Общий объем не более 1000 слов
+
+Будь конкретным и структурированным в ответе.
+"""
+
+    async def parse_user_request(self, user_text: str) -> Dict[str, Any]:
+        """Парсит запрос пользователя и определяет параметры анализа."""
+        try:
+            model_api = ModelAPI(Models.chatgpt.value())
+            messages = [
+                {"role": "system", "content": "Ты помощник для анализа запросов на инвестиционный анализ компаний."},
+                {"role": "user", "content": self.analysis_prompt.format(user_text=user_text)}
+            ]
+            
+            response = await model_api.get_response(messages)
+            
+            # Извлекаем JSON из ответа
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
+                logger.info(f"Parsed analysis request: {result}")
+                return result
+            else:
+                # Если JSON не найден, возвращаем дефолтные значения
+                logger.warning(f"Could not parse JSON from response: {response}")
+                return {"name": "unknown_company", "market": 1, "rivals": 1, "synergy": 1}
+                
+        except Exception as e:
+            logger.error(f"Error parsing user request: {e}")
+            return {"name": "unknown_company", "market": 1, "rivals": 1, "synergy": 1}
+
+    async def run_analysis(self, analysis_params: Dict[str, Any], file_content: str = "") -> Dict[str, str]:
+        """Запускает анализ на основе определенных параметров."""
+        results = {}
+        system_prompts = SystemPrompts()
+        model_api = ModelAPI(Models.chatgpt.value())
+        
+        company_name = analysis_params.get("name", "unknown_company")
+        
+        # Подготавливаем контекст
+        context = f"Анализируемая компания: {company_name}"
+        if file_content:
+            context += f"\n\nДополнительная информация из файла:\n{file_content}"
+        
+        # Запускаем анализы согласно параметрам
+        if analysis_params.get("market", 0):
+            try:
+                market_prompt = system_prompts.get_prompt(SystemPrompt.INVESTMENT_MARKET)
+                messages = [
+                    {"role": "system", "content": market_prompt},
+                    {"role": "user", "content": context}
+                ]
+                results["market"] = await model_api.get_response(messages)
+                logger.info("Market analysis completed")
+            except Exception as e:
+                logger.error(f"Error in market analysis: {e}")
+                results["market"] = f"Ошибка при анализе рынка: {str(e)}"
+        
+        if analysis_params.get("rivals", 0):
+            try:
+                rivals_prompt = system_prompts.get_prompt(SystemPrompt.INVESTMENT_RIVALS)
+                messages = [
+                    {"role": "system", "content": rivals_prompt},
+                    {"role": "user", "content": context}
+                ]
+                results["rivals"] = await model_api.get_response(messages)
+                logger.info("Rivals analysis completed")
+            except Exception as e:
+                logger.error(f"Error in rivals analysis: {e}")
+                results["rivals"] = f"Ошибка при анализе конкурентов: {str(e)}"
+        
+        if analysis_params.get("synergy", 0):
+            try:
+                synergy_prompt = system_prompts.get_prompt(SystemPrompt.INVESTMENT_SYNERGY)
+                messages = [
+                    {"role": "system", "content": synergy_prompt},
+                    {"role": "user", "content": context}
+                ]
+                results["synergy"] = await model_api.get_response(messages)
+                logger.info("Synergy analysis completed")
+            except Exception as e:
+                logger.error(f"Error in synergy analysis: {e}")
+                results["synergy"] = f"Ошибка при анализе синергии: {str(e)}"
+        
+        return results
+
+    def create_docx_report(self, company_name: str, analysis_results: Dict[str, str]) -> str:
+        """Создает DOCX отчет с результатами анализа."""
+        try:
+            doc = Document()
+            
+            # Заголовок
+            title = doc.add_heading(f'Анализ инвестиционной привлекательности: {company_name}', 0)
+            
+            # Добавляем результаты анализов
+            if "market" in analysis_results:
+                doc.add_heading('Рыночный анализ', level=1)
+                doc.add_paragraph(analysis_results["market"])
+                doc.add_page_break()
+            
+            if "rivals" in analysis_results:
+                doc.add_heading('Анализ конкурентов', level=1)
+                doc.add_paragraph(analysis_results["rivals"])
+                doc.add_page_break()
+            
+            if "synergy" in analysis_results:
+                doc.add_heading('Анализ синергии', level=1)
+                doc.add_paragraph(analysis_results["synergy"])
+            
+            # Сохраняем во временный файл
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
+            doc.save(temp_file.name)
+            temp_file.close()
+            
+            logger.info(f"DOCX report created: {temp_file.name}")
+            return temp_file.name
+            
+        except Exception as e:
+            logger.error(f"Error creating DOCX report: {e}")
+            raise
+
+    async def generate_executive_summary(self, docx_file_path: str) -> str:
+        """Генерирует executive summary на основе DOCX файла."""
+        try:
+            # Читаем содержимое DOCX файла
+            doc = Document(docx_file_path)
+            doc_content = ""
+            for paragraph in doc.paragraphs:
+                doc_content += paragraph.text + "\n"
+            
+            model_api = ModelAPI(Models.chatgpt.value())
+            messages = [
+                {"role": "system", "content": self.executive_summary_prompt},
+                {"role": "user", "content": f"Содержимое анализа:\n\n{doc_content}"}
+            ]
+            
+            executive_summary = await model_api.get_response(messages)
+            logger.info("Executive summary generated")
+            return executive_summary
+            
+        except Exception as e:
+            logger.error(f"Error generating executive summary: {e}")
+            return f"Ошибка при генерации executive summary: {str(e)}"
+
+
 class BaseScenario(ABC):
     """Базовый класс для сценариев с общей логикой работы с запросами, файлами и ошибками."""
 
@@ -132,12 +309,142 @@ class BaseScenario(ABC):
     def register(self, dp: Dispatcher) -> None:
         pass
 
-    async def process_query_with_file(self, message, state, file_content='', skip_system_prompt=False, max_history=0):
-        """Универсальная обработка запроса пользователя с файлом или без файла.
+    async def process_investment_analysis(self, message, state, file_content=''):
+        """Обработка запроса для анализа инвестиционной привлекательности."""
+        user_id = message.chat.id
+        user_data = await state.get_data()
+        user_query = user_data.get('user_query', '')
 
-        skip_system_prompt: пропускать ли системный промпт (для продолжения диалога)
-        max_history: сколько сообщений истории включать (0 = всё, >0 = последние N)
-        """
+        await self.delete_message_by_id(user_id, user_data.get('processing_msg_id'))
+
+        if not user_query and not file_content:
+            await message.answer(
+                'Необходимо ввести запрос или прикрепить файл. Пожалуйста, начните заново с команды /start',
+            )
+            return
+
+        try:
+            # Показываем прогресс
+            progress_msg = await message.answer('🔍 Анализирую запрос и определяю параметры анализа...')
+            
+            # Инициализируем процессор анализа
+            processor = InvestmentAnalysisProcessor()
+            
+            # Парсим запрос пользователя
+            analysis_params = await processor.parse_user_request(user_query)
+            company_name = analysis_params.get("name", "unknown_company")
+            
+            await progress_msg.edit_text(f'📊 Запускаю анализ для компании: {company_name}...')
+            
+            # Запускаем анализ
+            analysis_results = await processor.run_analysis(analysis_params, file_content)
+            
+            await progress_msg.edit_text('📄 Создаю отчет...')
+            
+            # Создаем DOCX отчет
+            docx_file_path = processor.create_docx_report(company_name, analysis_results)
+            
+            await progress_msg.edit_text('📝 Генерирую executive summary...')
+            
+            # Генерируем executive summary
+            executive_summary = await processor.generate_executive_summary(docx_file_path)
+            
+            # Отправляем executive summary
+            await self.send_markdown_response(message, executive_summary)
+            
+            # Отправляем DOCX файл
+            with open(docx_file_path, 'rb') as doc_file:
+                await message.answer_document(
+                    document=types.InputFile(doc_file, filename=f'investment_analysis_{company_name}.docx'),
+                    caption='📋 Полный отчет по инвестиционному анализу'
+                )
+            
+            # Удаляем временный файл
+            os.unlink(docx_file_path)
+            
+            await progress_msg.delete()
+            
+            await message.answer('Остались ли у Вас вопросы?', reply_markup=ContinueKeyboard())
+            await UserStates.ASKING_CONTINUE.set()
+            
+        except Exception as e:
+            await self.handle_error(message, e, "investment_analysis")
+
+    async def process_startups_scouting(self, message, state, file_content=''):
+        """Обработка запроса для скаутинга стартапов (старая логика)."""
+        user_id = message.chat.id
+        user_data = await state.get_data()
+        user_query = user_data.get('user_query', '')
+
+        await self.delete_message_by_id(user_id, user_data.get('processing_msg_id'))
+
+        if not user_query and not file_content:
+            await message.answer(
+                'Необходимо ввести запрос или прикрепить файл. Пожалуйста, начните заново с команды /start',
+            )
+            return
+
+        if file_content:
+            summary = await self.summarize_file_content(file_content)
+            if not summary:
+                await message.answer(
+                    'Произошла ошибка при суммаризации файла. Попробуйте еще раз или обратитесь к администратору.'
+                )
+                return
+            file_context = f'\n\nКонтекст из файла (суммаризация):\n{summary}'
+        else:
+            file_context = ''
+
+        chat_context = ChatContextManager()
+        strategy = Models.chatgpt.value()
+        model_api = ModelAPI(strategy)
+        
+        try:
+            excel_search = ExcelSearchStrategy()
+            excel_data = await excel_search.get_response([{'role': 'user', 'content': user_query}])
+            full_query = f'{user_query}\n\nРелевантные данные из базы стартапов:\n{excel_data}{file_context}'
+            
+            topic_name = user_data.get('chosen_topic')
+            chat_context.add_message(user_id, topic_name, 'user', full_query)
+
+            await self.bot.send_chat_action(chat_id=user_id, action='typing')
+            messages = chat_context.get_limited_messages_for_api(user_id, topic_name, limit=0)
+            response = await model_api.get_response(messages)
+
+            system_prompts = SystemPrompts()
+            detail_prompt_type = f'{topic_name.upper()}_DETAIL'
+            detail_prompt = system_prompts.get_prompt(SystemPrompt[detail_prompt_type])
+            detail_messages = [
+                {'role': 'system', 'content': detail_prompt},
+                {'role': 'user', 'content': full_query},
+            ]
+            detail_response = await model_api.get_response(detail_messages)
+            chat_context.add_message(user_id, topic_name, 'assistant', response)
+            
+            await self.send_markdown_response(message, response)
+            await self.send_html_detail_response(message, detail_response)
+
+            await message.answer('Остались ли у Вас вопросы?', reply_markup=ContinueKeyboard())
+            await UserStates.ASKING_CONTINUE.set()
+        except Exception as e:
+            await self.handle_error(message, e, "startups_scouting")
+
+    async def process_query_with_file(self, message, state, file_content='', skip_system_prompt=False, max_history=0):
+        """Универсальная обработка запроса пользователя с учетом выбранной темы."""
+        user_data = await state.get_data()
+        topic_name = user_data.get('chosen_topic')
+        
+        # Определяем тип обработки на основе темы
+        if topic_name == Topics.investment.name:
+            await self.process_investment_analysis(message, state, file_content)
+        elif topic_name == Topics.startups.name:
+            await self.process_startups_scouting(message, state, file_content)
+        else:
+            # Для других тем используем старую логику
+            await self.process_legacy_query(message, state, file_content, skip_system_prompt, max_history)
+
+    async def process_legacy_query(self, message, state, file_content='', skip_system_prompt=False, max_history=0):
+        """Старая логика обработки запросов для совместимости."""
         user_id = message.chat.id
         user_data = await state.get_data()
         topic_name = user_data.get('chosen_topic')
@@ -168,13 +475,7 @@ class BaseScenario(ABC):
         model_api = ModelAPI(strategy)
         
         try:
-            if topic_name == Topics.startups.name:
-                excel_search = ExcelSearchStrategy()
-                excel_data = await excel_search.get_response([{'role': 'user', 'content': user_query}])
-                full_query = f'{user_query}\n\nРелевантные данные из базы стартапов:\n{excel_data}{file_context}'
-            else:
-                full_query = f'{user_query}{file_context}'
-            
+            full_query = f'{user_query}{file_context}'
             chat_context.add_message(user_id, topic_name, 'user', full_query)
 
             await self.bot.send_chat_action(chat_id=user_id, action='typing')
@@ -189,8 +490,7 @@ class BaseScenario(ABC):
             system_prompts = SystemPrompts()
             detail_prompt_type = f'{topic_name.upper()}_DETAIL'
             detail_prompt = system_prompts.get_prompt(SystemPrompt[detail_prompt_type])
-            # - если skip_system_prompt=True (продолжение диалога), то добавляем последние 5 сообщений истории (без системных)
-            # - если skip_system_prompt=False (первый запрос), то только текущий вопрос пользователя
+            
             if skip_system_prompt:
                 user_assistant_history = [msg for msg in messages if msg['role'] != 'system'][-5:]
                 detail_messages = [{'role': 'system', 'content': detail_prompt}] + user_assistant_history
@@ -206,8 +506,6 @@ class BaseScenario(ABC):
 
             await message.answer('Остались ли у Вас вопросы?', reply_markup=ContinueKeyboard())
             await UserStates.ASKING_CONTINUE.set()
-        except aiogram.utils.exceptions.InvalidQueryID:
-            logger.warning(f'Устаревший callback_query для пользователя {user_id}')
         except Exception as e:
             await self.handle_error(message, e, model_name)
 
@@ -252,13 +550,11 @@ class BaseScenario(ABC):
                 f'⚠️ Вы превысили лимит токенов для модели.\nМаксимум: {token_limit} токенов.\nПожалуйста, уменьшите запрос и попробуйте снова.'
             )
         else:
-        # Новый дружелюбный ответ, без показа ошибки
             await message.answer(
                 'Извините, мой маленький компьютер перегружен. Поступает слишком много запросов. Пожалуйста, подождите несколько секунд или попробуйте ещё раз.\n'
                 'Если проблема не исчезнет, обратитесь к администратору.'
             )
 
-        # Отправляем детали ошибки админу для отладки
         await self.bot.send_message(
             chat_id=config.OWNER_ID,
             text=f'Ошибка при запросе к {model_name} от пользователя {message.chat.id}:\n{e}'
@@ -317,6 +613,19 @@ class BaseScenario(ABC):
         except Exception as e:
             logger.error(f'Ошибка при суммаризации файла: {e}', exc_info=True)
             return None
+
+
+# Все остальные классы остаются без изменений...
+# [Здесь идут все остальные классы: Access, StartHandler, ProcessingChooseTopicCallback, и т.д.]
+
+class Access(BaseScenario):
+    """Обработка получения доступа к боту."""
+
+    async def process(self, message: types.Message, state: FSMContext, **kwargs) -> NotImplemented:
+        raise NotImplementedError()
+
+    async def authorize_process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
+        admin_id = callback
 
 
 class Access(BaseScenario):
