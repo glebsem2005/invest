@@ -39,11 +39,11 @@ class EmailSender:
     
     def __init__(self):
         # Настройки email из config
-        self.smtp_server = config.SMTP_SERVER if hasattr(config, 'SMTP_SERVER') else 'smtp.gmail.com'
-        self.smtp_port = config.SMTP_PORT if hasattr(config, 'SMTP_PORT') else 587
-        self.email_user = config.EMAIL_USER if hasattr(config, 'EMAIL_USER') else None
-        self.email_password = config.EMAIL_PASSWORD if hasattr(config, 'EMAIL_PASSWORD') else None
-        self.sender_name = config.SENDER_NAME if hasattr(config, 'SENDER_NAME') else 'Investment Analysis Bot'
+        self.smtp_server = config.SMTP_SERVER
+        self.smtp_port = config.SMTP_PORT  
+        self.email_user = config.EMAIL_USER
+        self.email_password = config.EMAIL_PASSWORD
+        self.sender_name = config.SENDER_NAME
         
         if not self.email_user or not self.email_password:
             logger.warning("Email credentials not configured. Email sending will not work.")
@@ -64,7 +64,7 @@ class EmailSender:
             # Текст письма
             body = f"""Здравствуйте!
 
-Во вложении находится инвестиционный анализ компании "{company_name}", сгенерированный нашей системой анализа.
+Во вложении находится инвестиционный анализ компании {company_name}, сгенерированный нашей системой анализа.
 
 Отчет включает:
 - Рыночный анализ
@@ -73,7 +73,8 @@ class EmailSender:
 - Дополнительные вопросы и ответы (если были заданы)
 
 С уважением,
-Команда Investment Analysis Bot"""
+Команда Investment Analysis Bot
+"""
             
             msg.attach(MIMEText(body, 'plain', 'utf-8'))
             
@@ -105,7 +106,6 @@ class EmailSender:
         except Exception as e:
             logger.error(f"Failed to send email to {recipient_email}: {e}")
             return False
-
 
 class UserStates(StatesGroup):
     ACCESS = State()
