@@ -804,7 +804,7 @@ class InvestmentAnalysisProcessor:
         sanitized = sanitized.rstrip('.')
     
     # Проверяем, что результат не пустой
-	    if not sanitized:
+        if not sanitized:
             return 'unknown_company'
         
         return sanitized
