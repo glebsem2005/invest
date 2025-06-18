@@ -582,12 +582,15 @@ class BaseScenario(ABC):
             await progress_msg.delete()
             
             # Показываем кнопки действий
-            await message.answer(
+            keyboard = InvestmentActionsKeyboard()
+            logger.info(f"Created keyboard: {keyboard}")
+            actions_message = await message.answer(
                 'Что бы вы хотели сделать дальше?', 
-                reply_markup=InvestmentActionsKeyboard()
+                reply_markup=keyboard
             )
             await UserStates.INVESTMENT_ACTIONS.set()
             logger.info(f"User {user_id} moved to INVESTMENT_ACTIONS state")
+            logger.info(f"Actions message sent with ID: {actions_message.message_id}")
             
         except Exception as e:
             await self.handle_error(message, e, "investment_analysis")
@@ -903,6 +906,7 @@ class InvestmentActionsHandler(BaseScenario):
             await UserStates.INVESTMENT_REPORT_OPTIONS.set()
 
     def register(self, dp: Dispatcher) -> None:
+        logger.info("Registering InvestmentActionsHandler")
         dp.register_callback_query_handler(
             self.process,
             lambda c: c.data in ['investment_regenerate', 'investment_ask_question', 'investment_get_report'],
@@ -974,6 +978,7 @@ class BackToInvestmentActionsHandler(BaseScenario):
         await UserStates.INVESTMENT_ACTIONS.set()
 
     def register(self, dp: Dispatcher) -> None:
+        logger.info("Registering BackToInvestmentActionsHandler")
         dp.register_callback_query_handler(
             self.process,
             lambda c: c.data == 'back_to_investment_actions',
@@ -1038,6 +1043,7 @@ class InvestmentReportHandler(BaseScenario):
             await self.handle_error(callback_query.message, e, "report_generation")
 
     def register(self, dp: Dispatcher) -> None:
+        logger.info("Registering InvestmentReportHandler")
         dp.register_callback_query_handler(
             self.process,
             lambda c: c.data in ['investment_download', 'investment_email', 'investment_back_to_actions'],
@@ -1084,6 +1090,15 @@ class EmailInputHandler(BaseScenario):
             content_types=['text'],
             state=UserStates.ENTERING_EMAIL,
         )
+
+class Access(BaseScenario):
+    """Обработка получения доступа к боту."""
+
+    async def process(self, message: types.Message, state: FSMContext, **kwargs) -> NotImplemented:
+        raise NotImplementedError()
+
+    async def authorize_process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
+        admin_id = callback
 
 class Access(BaseScenario):
     """Обработка получения доступа к боту."""
