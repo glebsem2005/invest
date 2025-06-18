@@ -1206,7 +1206,7 @@ class InvestmentReportHandler(BaseScenario):
             await callback_query.message.edit_text('📄 Генерирую финальный отчет...')
             
             processor = InvestmentAnalysisProcessor()
-            company_name = user_data.get('company_name')
+            company_name = user_data.get('company_name', 'unknown_company')
             analysis_results = user_data.get('analysis_results')
             qa_history = user_data.get('qa_history', [])
             
@@ -1215,10 +1215,14 @@ class InvestmentReportHandler(BaseScenario):
                 company_name, analysis_results, qa_history
             )
             
+            # Формируем корректное имя файла
+            safe_company_name = self._sanitize_filename(company_name)
+            report_filename = f'investment_analysis_{safe_company_name}_final.docx'
+            
             # Отправляем файл
             with open(final_report_path, 'rb') as doc_file:
                 await callback_query.message.answer_document(
-                    document=types.InputFile(doc_file, filename=f'investment_analysis_{company_name}_final.docx'),
+                    document=types.InputFile(doc_file, filename=report_filename),
                     caption='📋 Финальный отчет по инвестиционному анализу'
                 )
             
@@ -1233,6 +1237,17 @@ class InvestmentReportHandler(BaseScenario):
             
         except Exception as e:
             await self.handle_error(callback_query.message, e, "report_generation")
+
+    def _sanitize_filename(self, filename):
+        """Очищает имя файла от недопустимых символов."""
+        import re
+        # Убираем недопустимые символы для имени файла
+        sanitized = re.sub(r'[<>:"/\\|?*]', '_', filename)
+        # Убираем пробелы в начале и конце
+        sanitized = sanitized.strip()
+        # Заменяем пробелы на подчеркивания
+        sanitized = sanitized.replace(' ', '_')
+        return sanitized
 
     def register(self, dp: Dispatcher) -> None:
         logger.info("=== REGISTERING InvestmentReportHandler ===")
@@ -1263,7 +1278,7 @@ class EmailInputHandler(BaseScenario):
             await message.answer('📧 Генерирую и отправляю отчет на почту...')
             
             processor = InvestmentAnalysisProcessor()
-            company_name = user_data.get('company_name')
+            company_name = user_data.get('company_name', 'unknown_company')
             analysis_results = user_data.get('analysis_results')
             qa_history = user_data.get('qa_history', [])
             
@@ -1272,8 +1287,17 @@ class EmailInputHandler(BaseScenario):
                 company_name, analysis_results, qa_history
             )
             
-            # Отправляем на email
-            success = await self.email_sender.send_report(email, company_name, final_report_path)
+            # Формируем корректное имя файла
+            safe_company_name = self._sanitize_filename(company_name)
+            report_filename = f'investment_analysis_{safe_company_name}_final.docx'
+            
+            # Отправляем на email с корректным именем файла
+            success = await self.email_sender.send_report(
+                email, 
+                company_name, 
+                final_report_path,
+                filename=report_filename  # Передаем желаемое имя файла
+            )
             
             # Удаляем временный файл
             if os.path.exists(final_report_path):
@@ -1293,6 +1317,17 @@ class EmailInputHandler(BaseScenario):
         except Exception as e:
             await self.handle_error(message, e, "email_sending")
 
+    def _sanitize_filename(self, filename):
+        """Очищает имя файла от недопустимых символов."""
+        import re
+        # Убираем недопустимые символы для имени файла
+        sanitized = re.sub(r'[<>:"/\\|?*]', '_', filename)
+        # Убираем пробелы в начале и конце
+        sanitized = sanitized.strip()
+        # Заменяем пробелы на подчеркивания
+        sanitized = sanitized.replace(' ', '_')
+        return sanitized
+
     def register(self, dp: Dispatcher) -> None:
         logger.info("=== REGISTERING EmailInputHandler ===")
         dp.register_message_handler(
@@ -1301,6 +1336,7 @@ class EmailInputHandler(BaseScenario):
             state=UserStates.ENTERING_EMAIL,
         )
         logger.info("=== EmailInputHandler REGISTERED ===")
+
 
 class Access(BaseScenario):
     """Обработка получения доступа к боту."""
