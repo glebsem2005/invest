@@ -34,6 +34,78 @@ Logger()
 logger = logging.getLogger('bot')
 config = Config()
 
+class EmailSender:
+    """Класс для отправки email с отчетами."""
+    
+    def __init__(self):
+        # Настройки email из config
+        self.smtp_server = config.SMTP_SERVER if hasattr(config, 'SMTP_SERVER') else 'smtp.gmail.com'
+        self.smtp_port = config.SMTP_PORT if hasattr(config, 'SMTP_PORT') else 587
+        self.email_user = config.EMAIL_USER if hasattr(config, 'EMAIL_USER') else None
+        self.email_password = config.EMAIL_PASSWORD if hasattr(config, 'EMAIL_PASSWORD') else None
+        self.sender_name = config.SENDER_NAME if hasattr(config, 'SENDER_NAME') else 'Investment Analysis Bot'
+        
+        if not self.email_user or not self.email_password:
+            logger.warning("Email credentials not configured. Email sending will not work.")
+    
+    async def send_report(self, recipient_email: str, company_name: str, report_file_path: str) -> bool:
+        """Отправляет отчет на указанный email."""
+        if not self.email_user or not self.email_password:
+            logger.error("Email credentials not configured")
+            return False
+            
+        try:
+            # Создаем сообщение
+            msg = MIMEMultipart()
+            msg['From'] = f"{self.sender_name} <{self.email_user}>"
+            msg['To'] = recipient_email
+            msg['Subject'] = f"Инвестиционный анализ: {company_name}"
+            
+            # Текст письма
+            body = f"""Здравствуйте!
+
+Во вложении находится инвестиционный анализ компании "{company_name}", сгенерированный нашей системой анализа.
+
+Отчет включает:
+- Рыночный анализ
+- Анализ конкурентов  
+- Анализ синергии
+- Дополнительные вопросы и ответы (если были заданы)
+
+С уважением,
+Команда Investment Analysis Bot"""
+            
+            msg.attach(MIMEText(body, 'plain', 'utf-8'))
+            
+            # Прикрепляем файл отчета
+            if os.path.exists(report_file_path):
+                with open(report_file_path, "rb") as attachment:
+                    part = MIMEBase('application', 'octet-stream')
+                    part.set_payload(attachment.read())
+                
+                encoders.encode_base64(part)
+                filename = f"investment_analysis_{company_name}.docx"
+                part.add_header('Content-Disposition', f'attachment; filename= "{filename}"')
+                msg.attach(part)
+            else:
+                logger.error(f"Report file not found: {report_file_path}")
+                return False
+            
+            # Отправляем email
+            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+            server.starttls()
+            server.login(self.email_user, self.email_password)
+            text = msg.as_string()
+            server.sendmail(self.email_user, recipient_email, text)
+            server.quit()
+            
+            logger.info(f"Email successfully sent to {recipient_email}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to send email to {recipient_email}: {e}")
+            return False
+
 
 class UserStates(StatesGroup):
     ACCESS = State()
@@ -994,6 +1066,10 @@ class BackToInvestmentActionsHandler(BaseScenario):
 class InvestmentReportHandler(BaseScenario):
     """Обработка получения отчета."""
 
+    def __init__(self, bot):
+        super().__init__(bot)
+        self.email_sender = EmailSender()
+
     async def process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
         user_id = callback_query.from_user.id
         action = callback_query.data
@@ -1005,6 +1081,14 @@ class InvestmentReportHandler(BaseScenario):
         if action == 'investment_download':
             await self._download_report(callback_query, state, user_data)
         elif action == 'investment_email':
+            # Проверяем, настроена ли отправка email
+            if not self.email_sender.email_user or not self.email_sender.email_password:
+                await callback_query.message.edit_text(
+                    '❌ Отправка на email временно недоступна. Воспользуйтесь скачиванием отчета.',
+                    reply_markup=InvestmentReportKeyboard()
+                )
+                return
+                
             await callback_query.message.edit_text('📧 Введите ваш email для отправки отчета:')
             await UserStates.ENTERING_EMAIL.set()
         elif action == 'investment_back_to_actions':
@@ -1060,6 +1144,10 @@ class InvestmentReportHandler(BaseScenario):
 class EmailInputHandler(BaseScenario):
     """Обработка ввода email для отправки отчета."""
 
+    def __init__(self, bot):
+        super().__init__(bot)
+        self.email_sender = EmailSender()
+
     async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
         email = message.text.strip()
         user_data = await state.get_data()
@@ -1077,9 +1165,22 @@ class EmailInputHandler(BaseScenario):
             analysis_results = user_data.get('analysis_results')
             qa_history = user_data.get('qa_history', [])
             
-            # Здесь должна быть логика отправки на email
-            # Пока просто имитируем отправку
-            await message.answer(f'✅ Отчет отправлен на {email}')
+            # Создаем финальный отчет
+            final_report_path = await processor.create_final_report_with_qa(
+                company_name, analysis_results, qa_history
+            )
+            
+            # Отправляем на email
+            success = await self.email_sender.send_report(email, company_name, final_report_path)
+            
+            # Удаляем временный файл
+            if os.path.exists(final_report_path):
+                os.unlink(final_report_path)
+            
+            if success:
+                await message.answer(f'✅ Отчет успешно отправлен на {email}')
+            else:
+                await message.answer(f'❌ Не удалось отправить отчет на {email}. Попробуйте скачать отчет.')
             
             await message.answer(
                 'Что бы вы хотели сделать дальше?',
@@ -1091,11 +1192,13 @@ class EmailInputHandler(BaseScenario):
             await self.handle_error(message, e, "email_sending")
 
     def register(self, dp: Dispatcher) -> None:
+        logger.info("=== REGISTERING EmailInputHandler ===")
         dp.register_message_handler(
             self.process,
             content_types=['text'],
             state=UserStates.ENTERING_EMAIL,
         )
+        logger.info("=== EmailInputHandler REGISTERED ===")
 
 class Access(BaseScenario):
     """Обработка получения доступа к боту."""
