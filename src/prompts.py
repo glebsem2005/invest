@@ -34,6 +34,10 @@ class Models(Enum):
 class SystemPrompt(DynamicEnum):
     INVESTMENT = 'investment'
     INVESTMENT_DETAIL = 'investment_detail'
+    # Новые промпты для инвестиционного анализа
+    INVESTMENT_MARKET = 'investment_market'
+    INVESTMENT_RIVALS = 'investment_rivals'
+    INVESTMENT_SYNERGY = 'investment_synergy'
     STARTUPS = 'startups'
     STARTUPS_DETAIL = 'startups_detail'
     FILE_SUMMARY = 'file_summary'
