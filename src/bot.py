@@ -156,30 +156,33 @@ class InvestmentAnalysisProcessor:
 """
 
     async def parse_user_request(self, user_text: str) -> Dict[str, Any]:
-        """Парсит запрос пользователя и определяет параметры анализа."""
-        try:
-            model_api = ModelAPI(Models.chatgpt.value())
-            messages = [
-                {"role": "system", "content": "Ты помощник для анализа запросов на инвестиционный анализ компаний."},
-                {"role": "user", "content": self.analysis_prompt.format(user_text=user_text)}
-            ]
+    """Парсит запрос пользователя и определяет параметры анализа."""
+    try:
+        model_api = ModelAPI(Models.chatgpt.value())
+        messages = [
+            {"role": "system", "content": "Ты помощник для извлечения названий компаний из текста. Отвечай только валидным JSON без лишнего текста."},
+            {"role": "user", "content": self.analysis_prompt.format(user_text=user_text)}
+        ]
+        
+        response = await model_api.get_response(messages)
+        logger.info(f"Raw response from GPT: {response}")
+        
+        # Извлекаем JSON из ответа
+        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        if json_match:
+            result = json.loads(json_match.group())
+            logger.info(f"Parsed analysis request: {result}")
+            return result
+        else:
+            # Если JSON не найден, возвращаем дефолтные значения
+            logger.warning(f"Could not parse JSON from response: {response}")
+            company_name = self._extract_company_manually(user_text)
+            return {"name": company_name, "market": 1, "rivals": 1, "synergy": 1}
             
-            response = await model_api.get_response(messages)
-            
-            # Извлекаем JSON из ответа
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                result = json.loads(json_match.group())
-                logger.info(f"Parsed analysis request: {result}")
-                return result
-            else:
-                # Если JSON не найден, возвращаем дефолтные значения
-                logger.warning(f"Could not parse JSON from response: {response}")
-                return {"name": "unknown_company", "market": 1, "rivals": 1, "synergy": 1}
-                
-        except Exception as e:
-            logger.error(f"Error parsing user request: {e}")
-            return {"name": "unknown_company", "market": 1, "rivals": 1, "synergy": 1}
+    except Exception as e:
+        logger.error(f"Error parsing user request: {e}")
+        company_name = self._extract_company_manually(user_text)
+        return {"name": company_name, "market": 1, "rivals": 1, "synergy": 1}
 
     async def run_analysis(self, analysis_params: Dict[str, Any], file_content: str = "") -> Dict[str, str]:
         """Запускает анализ на основе определенных параметров."""
