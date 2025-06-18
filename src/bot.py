@@ -1417,15 +1417,18 @@ class InvestmentReportHandler(BaseScenario):
         )
         logger.info("=== InvestmentReportHandler REGISTERED ===")
 
-
 class EmailInputHandler(BaseScenario):
     """Обработка ввода email для отправки отчета."""
 
     def __init__(self, bot):
         super().__init__(bot)
         self.email_sender = EmailSender()
+        
+        # Отладочная информация
+        logger.info(f"EmailSender methods: {[method for method in dir(self.email_sender) if not method.startswith('_')]}")
+        logger.info(f"Has send_report method: {hasattr(self.email_sender, 'send_report')}")
 
-    async def process(self, *args, **kwargs) -> None:  # Обновленная сигнатура
+    async def process(self, *args, **kwargs) -> None:
         # Извлекаем message и state из args или kwargs
         if args:
             message = args[0]
@@ -1465,6 +1468,12 @@ class EmailInputHandler(BaseScenario):
                 safe_company_name = "unknown_company"
             report_filename = f'investment_analysis_{safe_company_name}_final.docx'
             
+            # Проверяем наличие метода send_report
+            if not hasattr(self.email_sender, 'send_report'):
+                logger.error("EmailSender doesn't have send_report method!")
+                await message.answer('❌ Ошибка конфигурации email. Обратитесь к администратору.')
+                return
+            
             # Отправляем на email с корректным именем файла
             success = await self.email_sender.send_report(
                 email, 
@@ -1494,7 +1503,7 @@ class EmailInputHandler(BaseScenario):
     def register(self, dp: Dispatcher) -> None:
         logger.info("=== REGISTERING EmailInputHandler ===")
         dp.register_message_handler(
-            lambda message, state: self.process(message, state),  # Оборачиваем в lambda
+            lambda message, state: self.process(message, state),
             content_types=['text'],
             state=UserStates.ENTERING_EMAIL,
         )
