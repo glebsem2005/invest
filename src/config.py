@@ -81,3 +81,29 @@ class Config:
         if VECTOR_STORE_ID:
             return str(VECTOR_STORE_ID)
         return None
+
+@property
+def SMTP_SERVER(self) -> str:
+    return os.getenv('SMTP_SERVER', 'smtp.gmail.com')
+
+@property  
+def SMTP_PORT(self) -> int:
+    return int(os.getenv('SMTP_PORT', '587'))
+
+@property
+def EMAIL_USER(self) -> Optional[str]:
+    EMAIL_USER = os.getenv('EMAIL_USER')
+    if EMAIL_USER:
+        return str(EMAIL_USER)
+    return None
+
+@property
+def EMAIL_PASSWORD(self) -> Optional[str]:
+    EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD') 
+    if EMAIL_PASSWORD:
+        return str(EMAIL_PASSWORD)
+    return None
+
+@property
+def SENDER_NAME(self) -> str:
+    return os.getenv('SENDER_NAME', 'Investment Analysis Bot')
