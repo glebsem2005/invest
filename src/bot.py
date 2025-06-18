@@ -789,10 +789,10 @@ class InvestmentAnalysisProcessor:
     def _sanitize_filename(self, filename: str) -> str:
         """Очищает имя файла от недопустимых символов."""
         if not filename or not filename.strip():
-        return 'unknown_company'
+            return 'unknown_company'
     
     # Убираем недопустимые символы для имени файла
-       sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(filename))
+        sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(filename))
     # Убираем пробелы в начале и конце
     	sanitized = sanitized.strip()
     # Заменяем пробелы на подчеркивания
