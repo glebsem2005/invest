@@ -348,7 +348,6 @@ class InvestmentAnalysisProcessor:
     
 
     async def run_analysis(self, analysis_params: Dict[str, Any], file_content: str = "") -> Dict[str, str]:
-        """Запускает анализ на основе определенных параметров."""
         results = {}
         system_prompts = SystemPrompts()
         model_api = ModelAPI(Models.chatgpt.value())
@@ -363,17 +362,21 @@ class InvestmentAnalysisProcessor:
         # Запускаем анализы согласно параметрам
         if analysis_params.get("market", 0):
             try:
+                # Получаем промпт как строку
                 market_prompt_raw = system_prompts.get_prompt(SystemPrompt.INVESTMENT_MARKET)
-                market_prompt_data = market_prompt_raw
-
-                # Подставляем название компании в промпт
-                formatted_prompt = market_prompt_data["prompt"].replace("[название компании]", company_name)
-                full_prompt = formatted_prompt + additional_context
+                
+                # Парсим классический промпт
+                parsed_prompt = self._parse_classical_prompt(market_prompt_raw)
+                
+                # Подставляем название компании
+                user_content = parsed_prompt["prompt"].replace("[название компании]", company_name)
+                full_user_content = user_content + additional_context
                 
                 messages = [
-                    {"role": "system", "content": market_prompt_data["role"]},
-                    {"role": "user", "content": full_prompt}
+                    {"role": "system", "content": parsed_prompt["role"]},
+                    {"role": "user", "content": full_user_content}
                 ]
+                
                 results["market"] = await model_api.get_response(messages)
                 logger.info("Market analysis completed")
             except Exception as e:
@@ -382,17 +385,21 @@ class InvestmentAnalysisProcessor:
         
         if analysis_params.get("rivals", 0):
             try:
+                # Получаем промпт как строку
                 rivals_prompt_raw = system_prompts.get_prompt(SystemPrompt.INVESTMENT_RIVALS)
-                rivals_prompt_data = rivals_prompt_raw
                 
-                # Подставляем название компании в промпт
-                formatted_prompt = rivals_prompt_data["prompt"].replace("[название компании]", company_name)
-                full_prompt = formatted_prompt + additional_context
+                # Парсим классический промпт
+                parsed_prompt = self._parse_classical_prompt(rivals_prompt_raw)
+                
+                # Подставляем название компании
+                user_content = parsed_prompt["prompt"].replace("[название компании]", company_name)
+                full_user_content = user_content + additional_context
                 
                 messages = [
-                    {"role": "system", "content": rivals_prompt_data["role"]},
-                    {"role": "user", "content": full_prompt}
+                    {"role": "system", "content": parsed_prompt["role"]},
+                    {"role": "user", "content": full_user_content}
                 ]
+                
                 results["rivals"] = await model_api.get_response(messages)
                 logger.info("Rivals analysis completed")
             except Exception as e:
@@ -401,17 +408,30 @@ class InvestmentAnalysisProcessor:
         
         if analysis_params.get("synergy", 0):
             try:
+                # Получаем промпт для анализа синергии
                 synergy_prompt_raw = system_prompts.get_prompt(SystemPrompt.INVESTMENT_SYNERGY)
-                synergy_prompt_data = synergy_prompt_raw
                 
-                # Подставляем название компании в промпт
-                formatted_prompt = synergy_prompt_data["prompt"].replace("[название компании]", company_name)
-                full_prompt = formatted_prompt + additional_context
+                # Проверяем формат промпта
+                if isinstance(synergy_prompt_raw, dict):
+                    system_content = synergy_prompt_raw.get("role", "")
+                    user_content = synergy_prompt_raw.get("prompt", "")
+                    user_content = user_content.replace("[название компании]", company_name)
+                    full_user_content = user_content + additional_context
+                    
+                    messages = [
+                        {"role": "system", "content": system_content},
+                        {"role": "user", "content": full_user_content}
+                    ]
+                elif isinstance(synergy_prompt_raw, str):
+                    full_prompt = synergy_prompt_raw.replace("[название компании]", company_name)
+                    full_prompt = full_prompt + additional_context
+                    
+                    messages = [
+                        {"role": "user", "content": full_prompt}
+                    ]
+                else:
+                    raise ValueError(f"Неподдерживаемый формат промпта: {type(synergy_prompt_raw)}")
                 
-                messages = [
-                    {"role": "system", "content": synergy_prompt_data["role"]},
-                    {"role": "user", "content": full_prompt}
-                ]
                 results["synergy"] = await model_api.get_response(messages)
                 logger.info("Synergy analysis completed")
             except Exception as e:
@@ -419,6 +439,35 @@ class InvestmentAnalysisProcessor:
                 results["synergy"] = f"Ошибка при анализе синергии: {str(e)}"
         
         return results
+    
+    def _parse_classical_prompt(self, prompt_text: str) -> Dict[str, str]:
+        """
+        Парсит классический промпт формата 'РОЛЬ. ... КОНТЕКСТ. ...' 
+        и разделяет на роль и контекст.
+        """
+        try:
+            # Ищем паттерны РОЛЬ и КОНТЕКСТ
+            role_match = re.search(r'РОЛЬ\.\s*(.*?)(?=\n\s*КОНТЕКСТ\.|\n\s*[А-ЯЁ]+\.|\Z)', prompt_text, re.DOTALL | re.IGNORECASE)
+            context_match = re.search(r'КОНТЕКСТ\.\s*(.*?)(?=\n\s*[А-ЯЁ]+\.|\Z)', prompt_text, re.DOTALL | re.IGNORECASE)
+            
+            role = role_match.group(1).strip() if role_match else ""
+            context = context_match.group(1).strip() if context_match else ""
+            
+            # Если не нашли структурированные части, используем весь текст как контекст
+            if not role and not context:
+                context = prompt_text.strip()
+                role = "Ты профессиональный аналитик."
+            
+            return {
+                "role": role,
+                "prompt": context
+            }
+        except Exception as e:
+            logger.warning(f"Error parsing classical prompt: {e}")
+            return {
+                "role": "Ты профессиональный аналитик.",
+                "prompt": prompt_text
+            }
 
     def create_docx_report(self, company_name: str, analysis_results: Dict[str, str]) -> str:
         """Создает DOCX отчет с результатами анализа."""
