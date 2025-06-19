@@ -162,6 +162,8 @@ class UserStates(StatesGroup):
     INVESTMENT_QA = State()  # Режим вопросов-ответов по анализу
     INVESTMENT_REPORT_OPTIONS = State()  # Выбор способа получения отчета
     ENTERING_EMAIL = State()  # Ввод email для отправки отчета
+    CHOOSING_FINAL_ACTION = State()  # НОВОЕ: Выбор после получения отчета
+
 
 
 class AdminStates(StatesGroup):
@@ -1336,8 +1338,7 @@ class InvestmentReportHandler(BaseScenario):
         super().__init__(bot)
         self.email_sender = EmailSender()
 
-    async def process(self, *args, **kwargs) -> None:  # Обновленная сигнатура
-        # Извлекаем callback_query и state из args или kwargs
+    async def process(self, *args, **kwargs) -> None:
         if args:
             callback_query = args[0]
             state = args[1] if len(args) > 1 else kwargs.get('state')
@@ -1359,7 +1360,6 @@ class InvestmentReportHandler(BaseScenario):
         if action == 'investment_download':
             await self._download_report(callback_query, state, user_data)
         elif action == 'investment_email':
-            # Проверяем, настроена ли отправка email
             if not self.email_sender.email_user or not self.email_sender.email_password:
                 await callback_query.message.edit_text(
                     '❌ Отправка на email временно недоступна. Воспользуйтесь скачиванием отчета.',
@@ -1386,32 +1386,29 @@ class InvestmentReportHandler(BaseScenario):
             analysis_results = user_data.get('analysis_results')
             qa_history = user_data.get('qa_history', [])
             
-            # Создаем обновленный отчет с Q&A
             final_report_path = await processor.create_final_report_with_qa(
                 company_name, analysis_results, qa_history
             )
             
-            # Формируем корректное имя файла
             safe_company_name = processor._sanitize_filename(company_name)
             if not safe_company_name:
                 safe_company_name = "unknown_company"
             report_filename = f'investment_analysis_{safe_company_name}_final.docx'
             
-            # Отправляем файл
             with open(final_report_path, 'rb') as doc_file:
                 await callback_query.message.answer_document(
                     document=types.InputFile(doc_file, filename=report_filename),
                     caption=f'📋 Финальный отчет по инвестиционному анализу: {company_name}'
                 )
             
-            # Удаляем временный файл
             os.unlink(final_report_path)
             
+            # ГЛАВНОЕ ИЗМЕНЕНИЕ: Показываем финальные кнопки вместо возврата к действиям
             await callback_query.message.answer(
                 'Отчет готов! Что бы вы хотели сделать дальше?',
-                reply_markup=InvestmentActionsKeyboard()
+                reply_markup=FinalActionsKeyboard()
             )
-            await UserStates.INVESTMENT_ACTIONS.set()
+            await UserStates.CHOOSING_FINAL_ACTION.set()
             
         except Exception as e:
             await self.handle_error(callback_query.message, e, "report_generation")
@@ -1419,7 +1416,7 @@ class InvestmentReportHandler(BaseScenario):
     def register(self, dp: Dispatcher) -> None:
         logger.info("=== REGISTERING InvestmentReportHandler ===")
         dp.register_callback_query_handler(
-            lambda c, state: self.process(c, state),  # Оборачиваем в lambda
+            lambda c, state: self.process(c, state),
             lambda c: c.data in ['investment_download', 'investment_email', 'investment_back_to_actions'],
             state=UserStates.INVESTMENT_REPORT_OPTIONS,
         )
@@ -1431,13 +1428,8 @@ class EmailInputHandler(BaseScenario):
     def __init__(self, bot):
         super().__init__(bot)
         self.email_sender = EmailSender()
-        
-        # Отладочная информация
-        logger.info(f"EmailSender methods: {[method for method in dir(self.email_sender) if not method.startswith('_')]}")
-        logger.info(f"Has send_report method: {hasattr(self.email_sender, 'send_report')}")
 
     async def process(self, *args, **kwargs) -> None:
-        # Извлекаем message и state из args или kwargs
         if args:
             message = args[0]
             state = args[1] if len(args) > 1 else kwargs.get('state')
@@ -1452,7 +1444,6 @@ class EmailInputHandler(BaseScenario):
         email = message.text.strip()
         user_data = await state.get_data()
         
-        # Простая валидация email
         if '@' not in email or '.' not in email:
             await message.answer('❌ Некорректный email. Введите правильный email:')
             return
@@ -1465,24 +1456,20 @@ class EmailInputHandler(BaseScenario):
             analysis_results = user_data.get('analysis_results')
             qa_history = user_data.get('qa_history', [])
             
-            # Создаем финальный отчет
             final_report_path = await processor.create_final_report_with_qa(
                 company_name, analysis_results, qa_history
             )
             
-            # Формируем корректное имя файла
             safe_company_name = processor._sanitize_filename(company_name)
             if not safe_company_name:
                 safe_company_name = "unknown_company"
             report_filename = f'investment_analysis_{safe_company_name}_final.docx'
             
-            # Проверяем наличие метода send_report
             if not hasattr(self.email_sender, 'send_report'):
                 logger.error("EmailSender doesn't have send_report method!")
                 await message.answer('❌ Ошибка конфигурации email. Обратитесь к администратору.')
                 return
             
-            # Отправляем на email с корректным именем файла
             success = await self.email_sender.send_report(
                 email, 
                 company_name, 
@@ -1490,7 +1477,6 @@ class EmailInputHandler(BaseScenario):
                 filename=report_filename
             )
             
-            # Удаляем временный файл
             if os.path.exists(final_report_path):
                 os.unlink(final_report_path)
             
@@ -1499,11 +1485,12 @@ class EmailInputHandler(BaseScenario):
             else:
                 await message.answer(f'❌ Не удалось отправить отчет на {email}. Попробуйте скачать отчет.')
             
+            # ИЗМЕНЕНИЕ: После email тоже показываем финальные кнопки
             await message.answer(
                 'Что бы вы хотели сделать дальше?',
-                reply_markup=InvestmentActionsKeyboard()
+                reply_markup=FinalActionsKeyboard()
             )
-            await UserStates.INVESTMENT_ACTIONS.set()
+            await UserStates.CHOOSING_FINAL_ACTION.set()
             
         except Exception as e:
             await self.handle_error(message, e, "email_sending")
@@ -1517,6 +1504,73 @@ class EmailInputHandler(BaseScenario):
         )
         logger.info("=== EmailInputHandler REGISTERED ===")
 
+class FinalActionsHandler(BaseScenario):
+    """Обработка финальных действий после получения отчета."""
+
+    async def process(self, *args, **kwargs) -> None:
+        if args:
+            callback_query = args[0]
+            state = args[1] if len(args) > 1 else kwargs.get('state')
+        else:
+            callback_query = kwargs.get('callback_query')
+            state = kwargs.get('state')
+            
+        if not callback_query or not state:
+            logger.error("FinalActionsHandler: missing callback_query or state parameter")
+            return
+
+        user_id = callback_query.from_user.id
+        action = callback_query.data
+
+        logger.info(f"FinalActionsHandler: user {user_id}, action {action}")
+        await callback_query.answer()
+
+        if action == 'new_company_analysis':
+            # Новый анализ - очищаем все и начинаем заново
+            await callback_query.message.delete()
+            await state.finish()
+            
+            chat_context = ChatContextManager()
+            chat_context.end_active_chats(user_id)
+            chat_context.cleanup_user_context(user_id)
+            
+            # Автоматически устанавливаем тему investment снова
+            system_prompts = SystemPrompts()
+            system_prompt = system_prompts.get_prompt(SystemPrompt.INVESTMENT)
+            chat_context.start_new_chat(user_id, 'investment', system_prompt)
+            
+            await callback_query.message.answer(
+                'Введите название новой компании или опишите ваш запрос для анализа инвестиционной привлекательности.'
+            )
+            await UserStates.ENTERING_PROMPT.set()
+            
+        elif action == 'return_to_main_bot':
+            # Переход к основному боту через URL
+            await callback_query.message.delete()
+            await state.finish()
+            
+            keyboard = types.InlineKeyboardMarkup()
+            keyboard.add(
+                types.InlineKeyboardButton(
+                    text="🔄 Перейти к основному боту",
+                    url="https://t.me/sberallaibot"
+                )
+            )
+            
+            await callback_query.message.answer(
+                '👋 Спасибо за использование бота анализа инвестиционной привлекательности!\n\n'
+                'Нажмите кнопку ниже, чтобы перейти к основному боту Сбера:',
+                reply_markup=keyboard
+            )
+
+    def register(self, dp: Dispatcher) -> None:
+        logger.info("=== REGISTERING FinalActionsHandler ===")
+        dp.register_callback_query_handler(
+            lambda c, state: self.process(c, state),
+            lambda c: c.data in ['new_company_analysis', 'return_to_main_bot'],
+            state=UserStates.CHOOSING_FINAL_ACTION,
+        )
+        logger.info("=== FinalActionsHandler REGISTERED ===")
 
 class Access(BaseScenario):
     """Обработка получения доступа к боту."""
@@ -1722,6 +1776,13 @@ class ProcessingEnterPromptHandler(BaseScenario):
             content_types=['text'],
             state=UserStates.ENTERING_PROMPT,
         )
+
+class FinalActionsKeyboard(Keyboard):
+    """Клавиатура после получения отчета."""
+    _buttons = (
+        Button('🏢 Новая компания', 'new_company_analysis'),
+        Button('← Вернуться к основному боту', 'return_to_main_bot'),
+    )
 
 class AttachFileHandler(BaseScenario):
     """Универсальный обработчик прикрепления файла (первый запрос и продолжение диалога)."""
@@ -2603,7 +2664,7 @@ class BotManager:
     main_scenario = {
         'access': Access,
         'start': StartHandler,
-        'choose_topic': ProcessingChooseTopicCallback,
+        # УБИРАЕМ: 'choose_topic': ProcessingChooseTopicCallback,
         'enter_prompt': ProcessingEnterPromptHandler,
         'attach_file': AttachFileHandler,
         'upload_file': UploadFileHandler,
@@ -2652,7 +2713,8 @@ class BotManager:
             'investment_qa': InvestmentQAHandler, 
             'back_to_investment_actions': BackToInvestmentActionsHandler, 
             'investment_report': InvestmentReportHandler, 
-            'email_input': EmailInputHandler, 
+            'email_input': EmailInputHandler,
+            'final_actions': FinalActionsHandler,  # ДОБАВЛЯЕМ
         } 
         logger.info(f"Investment analysis scenario created: {list(self.investment_analysis_scenario.keys())}") 
 
