@@ -1633,8 +1633,17 @@ class StartHandler(BaseScenario):
                 )
             await UserStates.ACCESS.set()
         else:
-            await message.answer('Здравствуйте! Чем я могу вам помочь?', reply_markup=TopicKeyboard())
-            await UserStates.CHOOSING_TOPIC.set()
+            # ИЗМЕНЕНИЕ: Сразу переходим к инвестиционному анализу без выбора темы
+            await message.answer('Здравствуйте! Добро пожаловать в бот для анализа инвестиционной привлекательности.\n\nВведите название компании или опишите ваш запрос для анализа.')
+            
+            # Автоматически устанавливаем тему как investment
+            system_prompts = SystemPrompts()
+            system_prompt = system_prompts.get_prompt(SystemPrompt.INVESTMENT)
+            
+            chat_context.start_new_chat(user_id, 'investment', system_prompt)
+            
+            # Устанавливаем состояние прямо в ввод промпта для инвестиционного анализа
+            await UserStates.ENTERING_PROMPT.set()
 
     def register(self, dp: Dispatcher) -> None:
         dp.register_message_handler(self.process, commands=['start'], state='*')
@@ -1687,17 +1696,15 @@ class ProcessingEnterPromptHandler(BaseScenario):
 
     async def process(self, message: types.Message, state: FSMContext, **kwargs) -> None:
         user_id = message.from_user.id
-        user_data = await state.get_data()
-        topic_name = user_data['chosen_topic']
-        model_name = user_data['chosen_model']
+        
+        # ИЗМЕНЕНИЕ: Автоматически устанавливаем investment тему
+        topic_name = 'investment'
+        model_name = 'chatgpt'
+        
+        # Обновляем состояние с установленными значениями
+        await state.update_data(chosen_topic=topic_name, chosen_model=model_name)
 
         logger.info(f'Получен текстовый запрос от {user_id}: модель={model_name}, тема={topic_name}')
-
-        if 'prompt_message_id' in user_data:
-            try:
-                await self.bot.delete_message(chat_id=user_id, message_id=user_data['prompt_message_id'])
-            except Exception as e:
-                logger.error(f'Ошибка удаления сообщения {user_data["prompt_message_id"]}: {e}')
 
         await state.update_data(user_query=message.text)
 
@@ -1715,7 +1722,6 @@ class ProcessingEnterPromptHandler(BaseScenario):
             content_types=['text'],
             state=UserStates.ENTERING_PROMPT,
         )
-
 
 class AttachFileHandler(BaseScenario):
     """Универсальный обработчик прикрепления файла (первый запрос и продолжение диалога)."""
@@ -1817,12 +1823,13 @@ class ProcessingContinueCallback(BaseScenario):
             logger.info(f'Пользователь {user_id} решил начать новый диалог')
             await state.finish()
             await callback_query.message.delete()
+            
+            # ИЗМЕНЕНИЕ: Вместо выбора темы сразу переходим к новому анализу
             await self.bot.send_message(
                 chat_id=user_id,
-                text='Выберите тему для анализа:',
-                reply_markup=TopicKeyboard(),
+                text='Введите название компании или опишите ваш запрос для нового анализа инвестиционной привлекательности.'
             )
-            await UserStates.CHOOSING_TOPIC.set()
+            await UserStates.ENTERING_PROMPT.set()
 
     def register(self, dp: Dispatcher) -> None:
         dp.register_callback_query_handler(
@@ -1874,8 +1881,9 @@ class ResetStateHandler(BaseScenario):
 
         await state.finish()
 
-        await message.answer('Состояние сброшено. Выберите тему для анализа:', reply_markup=TopicKeyboard())
-        await UserStates.CHOOSING_TOPIC.set()
+        # ИЗМЕНЕНИЕ: После reset тоже сразу идем к инвестиционному анализу
+        await message.answer('Состояние сброшено. Введите название компании или опишите ваш запрос для анализа инвестиционной привлекательности.')
+        await UserStates.ENTERING_PROMPT.set()
 
         logger.info(f'Состояние пользователя {user_id} успешно сброшено')
 
@@ -2696,5 +2704,6 @@ if __name__ == '__main__':
     BotManager(bot, dp)
 
     executor.start_polling(dp, skip_updates=True)
+
 
 
