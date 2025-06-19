@@ -895,7 +895,7 @@ class BaseScenario(ABC):
             await self.handle_error(message, e, "investment_analysis")
 
     async def process_startups_scouting(self, message, state, file_content=''):
-        """Обработка запроса для скаутинга стартапов (старая логика)."""
+        """Обработка запроса для скаутинга стартапов (исправленная версия без file_search)."""
         user_id = message.chat.id
         user_data = await state.get_data()
         user_query = user_data.get('user_query', '')
@@ -903,16 +903,14 @@ class BaseScenario(ABC):
         await self.delete_message_by_id(user_id, user_data.get('processing_msg_id'))
 
         if not user_query and not file_content:
-            await message.answer(
-                'Необходимо ввести запрос или прикрепить файл. Пожалуйста, начните заново с команды /start',
+            await message.answer('Необходимо ввести запрос или прикрепить файл. Пожалуйста, начните заново с команды /start',
             )
             return
 
         if file_content:
             summary = await self.summarize_file_content(file_content)
             if not summary:
-                await message.answer(
-                    'Произошла ошибка при суммаризации файла. Попробуйте еще раз или обратитесь к администратору.'
+                await message.answer('Произошла ошибка при суммаризации файла. Попробуйте еще раз или обратитесь к администратору.'
                 )
                 return
             file_context = f'\n\nКонтекст из файла (суммаризация):\n{summary}'
@@ -922,12 +920,20 @@ class BaseScenario(ABC):
         chat_context = ChatContextManager()
         strategy = Models.chatgpt.value()
         model_api = ModelAPI(strategy)
-        
+    
         try:
+        # Используем ExcelSearchStrategy но без file_search
             excel_search = ExcelSearchStrategy()
             excel_data = await excel_search.get_response([{'role': 'user', 'content': user_query}])
-            full_query = f'{user_query}\n\nРелевантные данные из базы стартапов:\n{excel_data}{file_context}'
-            
+        
+        # Если получили данные из Excel, добавляем к запросу
+            if excel_data and "Ошибка" not in excel_data:
+                full_query = f'{user_query}\n\nРелевантные данные из базы стартапов:\n{excel_data}{file_context}'
+            else:
+            # Если ошибка с Excel, работаем без данных
+                full_query = f'{user_query}{file_context}'
+                logger.warning(f"Excel search failed, continuing without data: {excel_data}")
+        
             topic_name = user_data.get('chosen_topic')
             chat_context.add_message(user_id, topic_name, 'user', full_query)
 
@@ -944,7 +950,7 @@ class BaseScenario(ABC):
             ]
             detail_response = await model_api.get_response(detail_messages)
             chat_context.add_message(user_id, topic_name, 'assistant', response)
-            
+        
             await self.send_markdown_response(message, response)
             await self.send_html_detail_response(message, detail_response)
 
@@ -952,7 +958,7 @@ class BaseScenario(ABC):
             await UserStates.ASKING_CONTINUE.set()
         except Exception as e:
             await self.handle_error(message, e, "startups_scouting")
-
+        
     async def process_query_with_file(self, message, state, file_content='', skip_system_prompt=False, max_history=0):
         """Универсальная обработка запроса пользователя с учетом выбранной темы."""
         user_data = await state.get_data()
