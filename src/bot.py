@@ -250,9 +250,9 @@ class InvestmentActionsKeyboard(Keyboard):
     """Клавиатура для действий после получения executive summary."""
 
     _buttons = (
-        Button('🔄 Регенерация', 'investment_regenerate'),
-        Button('❓ Задать вопрос', 'investment_ask_question'),
-        Button('📄 Получить отчет', 'investment_get_report'),
+        Button('Повторная генерация', 'investment_regenerate'),
+        Button('Задать вопрос', 'investment_ask_question'),
+        Button('Получить отчет', 'investment_get_report'),
     )
 
 
@@ -260,8 +260,8 @@ class InvestmentReportKeyboard(Keyboard):
     """Клавиатура для выбора способа получения отчета."""
 
     _buttons = (
-        Button('💾 Скачать отчет', 'investment_download'),
-        Button('📧 Выслать на почту', 'investment_email'),
+        Button('Скачать отчет', 'investment_download'),
+        Button('Выслать на почту', 'investment_email'),
         Button('← Назад', 'investment_back_to_actions'),
     )
 
@@ -1174,7 +1174,7 @@ class InvestmentActionsHandler(BaseScenario):
         if action == 'investment_regenerate':
             # Регенерация анализа
             await callback_query.message.delete()
-            progress_msg = await callback_query.message.answer('🔄 Запускаю регенерацию анализа...')
+            progress_msg = await callback_query.message.answer('🔄 Запускаю повторную генерацию анализа...')
             
             try:
                 # Повторно запускаем анализ
@@ -1367,7 +1367,7 @@ class InvestmentReportHandler(BaseScenario):
                 )
                 return
                 
-            await callback_query.message.edit_text('📧 Введите ваш email для отправки отчета:')
+            await callback_query.message.edit_text('Введите ваш email для отправки отчета:')
             await UserStates.ENTERING_EMAIL.set()
         elif action == 'investment_back_to_actions':
             await callback_query.message.edit_text(
@@ -1379,7 +1379,7 @@ class InvestmentReportHandler(BaseScenario):
     async def _download_report(self, callback_query, state, user_data):
         """Генерирует и отправляет отчет для скачивания."""
         try:
-            await callback_query.message.edit_text('📄 Генерирую финальный отчет...')
+            await callback_query.message.edit_text('Генерирую финальный отчет...')
             
             processor = InvestmentAnalysisProcessor()
             company_name = user_data.get('company_name', 'unknown_company')
@@ -1398,7 +1398,7 @@ class InvestmentReportHandler(BaseScenario):
             with open(final_report_path, 'rb') as doc_file:
                 await callback_query.message.answer_document(
                     document=types.InputFile(doc_file, filename=report_filename),
-                    caption=f'📋 Финальный отчет по инвестиционному анализу: {company_name}'
+                    caption=f'Финальный отчет c инвестиционным анализом: {company_name}'
                 )
             
             os.unlink(final_report_path)
@@ -1449,7 +1449,7 @@ class EmailInputHandler(BaseScenario):
             return
         
         try:
-            await message.answer('📧 Генерирую и отправляю отчет на почту...')
+            await message.answer('Генерирую и отправляю отчет на почту...')
             
             processor = InvestmentAnalysisProcessor()
             company_name = user_data.get('company_name', 'unknown_company')
@@ -1552,14 +1552,14 @@ class FinalActionsHandler(BaseScenario):
             keyboard = types.InlineKeyboardMarkup()
             keyboard.add(
                 types.InlineKeyboardButton(
-                    text="🔄 Перейти к основному боту",
+                    text="Перейти к основному боту",
                     url="https://t.me/sberallaibot"
                 )
             )
             
             await callback_query.message.answer(
-                '👋 Спасибо за использование бота анализа инвестиционной привлекательности!\n\n'
-                'Нажмите кнопку ниже, чтобы перейти к основному боту Сбера:',
+                'Спасибо за использование бота для анализа инвестиционной привлекательности!\n\n'
+                'Нажмите кнопку ниже, чтобы перейти к основному боту Сбер CPNB:',
                 reply_markup=keyboard
             )
 
