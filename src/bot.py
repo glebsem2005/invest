@@ -34,14 +34,6 @@ Logger()
 logger = logging.getLogger('bot')
 config = Config()
 
-import email.utils
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication  # ВАЖНО: используем MIMEApplication вместо MIMEBase
-from email import encoders
-import smtplib
-import os
-
 class EmailSender:
     """Класс для отправки email с отчетами."""
     
@@ -60,39 +52,39 @@ class EmailSender:
         """Очищает имя файла от недопустимых символов."""
         if not filename or not filename.strip():
             return 'unknown_company'
-        
-        # Убираем недопустимые символы для имени файла
+    
+    # Убираем недопустимые символы для имени файла
         sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(filename))
-        # Убираем пробелы в начале и конце
+    # Убираем пробелы в начале и конце
         sanitized = sanitized.strip()
-        # Заменяем пробелы на подчеркивания
+    # Заменяем пробелы на подчеркивания
         sanitized = sanitized.replace(' ', '_')
-        # Ограничиваем длину
+    # Ограничиваем длину
         if len(sanitized) > 50:
             sanitized = sanitized[:50]
-        # Убираем точки в конце (проблемы в Windows)
+    # Убираем точки в конце (проблемы в Windows)
         sanitized = sanitized.rstrip('.')
-        
-        # Проверяем, что результат не пустой
+    
+    # Проверяем, что результат не пустой
         if not sanitized:
             return 'unknown_company'
-            
+        
         return sanitized
-    
+
     async def send_report(self, recipient_email: str, company_name: str, report_file_path: str, filename: str = None) -> bool:
         """Отправляет отчет на указанный email."""
         if not self.email_user or not self.email_password:
             logger.error("Email credentials not configured")
             return False
-            
+        
         try:
-            # Создаем сообщение
+        # Создаем сообщение
             msg = MIMEMultipart()
             msg['From'] = f"{self.sender_name} <{self.email_user}>"
             msg['To'] = recipient_email
             msg['Subject'] = f"Инвестиционный анализ: {company_name}"
-            
-            # Текст письма
+        
+        # Текст письма
             body = f"""Здравствуйте!
 
 Высылаем вам результаты инвестиционного анализа компании "{company_name}".
@@ -104,78 +96,54 @@ class EmailSender:
 
 С уважением,
 Команда аналитиков"""
-            
+        
             msg.attach(MIMEText(body, 'plain', 'utf-8'))
-            
-            # Прикрепляем файл отчета
+        
+        # Прикрепляем файл отчета
             if os.path.exists(report_file_path):
-                # Формируем безопасное имя файла
+                with open(report_file_path, "rb") as attachment:
+                    part = MIMEBase('application', 'octet-stream')
+                    part.set_payload(attachment.read())
+  
+                encoders.encode_base64(part)
+            
+            # Формируем безопасное имя файла
                 if filename:
                     safe_filename = self._sanitize_filename(filename)
                 else:
                     safe_company_name = self._sanitize_filename(company_name)
                     safe_filename = f"investment_analysis_{safe_company_name}.docx"
-                
-                # Убеждаемся что имя файла не пустое
+            
+            # Убеждаемся что имя файла не пустое
                 if not safe_filename:
                     safe_filename = "investment_analysis_report.docx"
-                
-                logger.info(f"Attaching file with name: {safe_filename}")
-                
-                # ГЛАВНОЕ ИСПРАВЛЕНИЕ: Используем MIMEApplication вместо MIMEBase
-                with open(report_file_path, "rb") as attachment_file:
-                    # Читаем содержимое файла
-                    file_content = attachment_file.read()
-                    
-                    # Создаем MIME объект для приложения
-                    part = MIMEApplication(
-                        file_content,
-                        _subtype='vnd.openxmlformats-officedocument.wordprocessingml.document'
-                    )
-                    
-                    # ИСПРАВЛЕНИЕ: Используем правильный способ установки имени файла
-                    # Кодируем имя файла в RFC 2231 формате для поддержки не-ASCII символов
-                    encoded_filename = email.utils.encode_rfc2231(safe_filename, charset='utf-8')
-                    
-                    # Устанавливаем заголовки вложения
-                    part.add_header(
-                        'Content-Disposition',
-                        'attachment',
-                        filename=safe_filename,  # Основное имя файла
-                        filename_star=encoded_filename  # Кодированное имя для совместимости
-                    )
-                    
-                    # Также устанавливаем Content-Type с именем файла
-                    part.add_header(
-                        'Content-Type',
-                        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                        name=safe_filename
-                    )
-                    
-                    msg.attach(part)
-                
-                logger.info(f"File attached successfully with name: {safe_filename}")
+            
+            # Используем правильный заголовок без лишних пробелов
+                part.add_header(
+                    'Content-Disposition',
+                    f'attachment; filename="{safe_filename}"'
+                )
+                msg.attach(part)
+            
+                logger.info(f"Attached file with name: {safe_filename}")
             else:
                 logger.error(f"Report file not found: {report_file_path}")
                 return False
-            
-            # Отправляем email
+        
+        # Отправляем email
             server = smtplib.SMTP(self.smtp_server, self.smtp_port)
             server.starttls()
             server.login(self.email_user, self.email_password)
             text = msg.as_string()
             server.sendmail(self.email_user, recipient_email, text)
             server.quit()
-            
+        
             logger.info(f"Email successfully sent to {recipient_email}")
             return True
-            
+        
         except Exception as e:
             logger.error(f"Failed to send email to {recipient_email}: {e}")
-            logger.error(f"Exception details: {traceback.format_exc()}")
             return False
-
-
 
 class UserStates(StatesGroup):
     ACCESS = State()
@@ -690,6 +658,7 @@ class InvestmentAnalysisProcessor:
             
         except Exception as e:
             logger.error(f"Error generating executive summary: {e}")
+
     async def create_final_report_with_qa(self, company_name: str, analysis_results: Dict[str, str], qa_history: list) -> str:
         """Создает финальный отчет с интегрированными Q&A."""
         try:
@@ -740,11 +709,13 @@ class InvestmentAnalysisProcessor:
                     answer_para = doc.add_paragraph()
                     answer_run = answer_para.add_run("Ответ: ")
                     answer_run.bold = True
+                
+                # Добавляем сам текст ответа
                     self._add_formatted_content(doc, qa['answer'], is_sub_content=True)
                 
-                # Добавляем отступ между Q&A парами
+                # Добавляем небольшой отступ между Q&A парами (если не последний)
                     if i < len(qa_history):
-                        doc.add_paragraph()
+                        doc.add_paragraph()  # Один пустой параграф вместо нескольких
         
         # Сохраняем во временный файл
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='_final.docx')
@@ -759,36 +730,37 @@ class InvestmentAnalysisProcessor:
         # В случае ошибки возвращаем базовый отчет
             return self.create_docx_report(company_name, analysis_results)
 
+
     def _add_formatted_content(self, doc, content: str, is_sub_content: bool = False):
         """Добавляет форматированный контент в документ."""
         if not content:
             return
-        
+    
     # Разбиваем контент на параграфы
         paragraphs = content.split('\n\n')
     
         for para_text in paragraphs:
             if not para_text.strip():
                 continue
-            
+        
             lines = para_text.strip().split('\n')
         
             for line in lines:
                 line = line.strip()
                 if not line:
                     continue
-                
+            
             # Проверяем, является ли строка заголовком
                 if line.startswith('##'):
                 # Подзаголовок уровня 2
                     heading_text = line.replace('##', '').strip()
                     if heading_text:
-                        doc.add_heading(heading_text, level=2)
+                        doc.add_heading(heading_text, level=3)
                 elif line.startswith('#'):
                 # Подзаголовок уровня 1 
                     heading_text = line.replace('#', '').strip()
                     if heading_text:
-                        doc.add_heading(heading_text, level=2 if is_sub_content else 1)
+                        doc.add_heading(heading_text, level=2 if is_sub_content else 2)
                 elif line.startswith('**') and line.endswith('**'):
                 # Жирный текст как отдельный параграф
                     para = doc.add_paragraph()
@@ -815,9 +787,7 @@ class InvestmentAnalysisProcessor:
                             run = para.add_run(part)
                             if i % 2 == 1:  # Нечетные части - жирные
                                 run.bold = True
-        
-        # Добавляем отступ между параграфами
-            doc.add_paragraph()
+
     def _sanitize_filename(self, filename: str) -> str:
         """Очищает имя файла от недопустимых символов."""
         if not filename or not filename.strip():
