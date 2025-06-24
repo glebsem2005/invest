@@ -28,8 +28,8 @@ from file_processor import FileProcessor
 from keyboards_builder import Button, DynamicKeyboard, Keyboard
 from logger import Logger
 from models_api import ExcelFileManager, ExcelSearchStrategy, ModelAPI
-from prompts import DEFAULT_PROMPTS_DIR, Models, SystemPrompt, SystemPrompts, Topicsfrom sql_auth 
-import init_auth_system, check_user_authorized
+from prompts import DEFAULT_PROMPTS_DIR, Models, SystemPrompt, SystemPrompts, Topics
+from sql_auth import init_auth_system, check_user_authorized
 
 Logger()
 logger = logging.getLogger('bot')
