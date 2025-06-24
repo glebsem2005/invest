@@ -28,7 +28,8 @@ from file_processor import FileProcessor
 from keyboards_builder import Button, DynamicKeyboard, Keyboard
 from logger import Logger
 from models_api import ExcelFileManager, ExcelSearchStrategy, ModelAPI
-from prompts import DEFAULT_PROMPTS_DIR, Models, SystemPrompt, SystemPrompts, Topics
+from prompts import DEFAULT_PROMPTS_DIR, Models, SystemPrompt, SystemPrompts, Topicsfrom sql_auth 
+import init_auth_system, check_user_authorized
 
 Logger()
 logger = logging.getLogger('bot')
@@ -220,6 +221,26 @@ class AuthorizeKeyboard(Keyboard):
     """Клавиатура для авторизации."""
 
     _buttons = [Button('Авторизовать', 'authorize_yes'), Button('Отклонить', 'authorize_no')]
+
+class UnauthorizedKeyboard(Keyboard):
+    """Клавиатура для неавторизованных пользователей."""
+    
+    _buttons = (
+        Button('🔐 Пройти авторизацию', 'go_to_main_bot'),
+    )
+    
+    @classmethod
+    def get_markup(cls):
+        """Создаем клавиатуру с переходом в главный бот"""
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        
+        # Кнопка перехода в главный бот для авторизации
+        markup.add(types.InlineKeyboardButton(
+            text="🔐 Пройти авторизацию",
+            url="https://t.me/sberallaibot"
+        ))
+        
+        return markup
 
 
 class AdminPromptKeyboard(DynamicKeyboard):
@@ -1660,7 +1681,7 @@ class Access(BaseScenario):
 
 
 class StartHandler(BaseScenario):
-    """Обработка /start команды."""
+    """Обработка /start команды с проверкой авторизации."""
 
     async def process(self, message: types.Message, **kwargs) -> None:
         user_id = message.from_user.id
@@ -1673,31 +1694,46 @@ class StartHandler(BaseScenario):
         logger.info(f'Очищаем неактивные чаты пользователя {user_id} при /start')
         chat_context.cleanup_user_context(user_id)
 
-        if user_id not in config.AUTHORIZED_USERS_IDS:
-            logger.info(f'Запрос авторизации для {user_id} к администраторам {config.ADMIN_USERS}')
-            await message.answer('Запрашиваю доступ у администратора.')
-            user_first_name = message.from_user.first_name
-            user_last_name = message.from_user.last_name
-            msg = f'Пользователь {user_first_name} {user_last_name} (id: {user_id}) запрашивает доступ.'
-            for admin_user in config.ADMIN_USERS:
-                await self.bot.send_message(
-                    chat_id=admin_user,
-                    text=msg,
-                    reply_markup=AuthorizeKeyboard(),
+        # ПРОВЕРКА АВТОРИЗАЦИИ
+        try:
+            is_authorized = await check_user_authorized(user_id)
+            
+            if not is_authorized:
+                logger.info(f'Пользователь {user_id} НЕ найден в базе - перенаправляем на авторизацию')
+                await message.answer(
+                    "🔒 Доступ к боту ограничен.\n\n"
+                    "Для получения доступа пройдите авторизацию в главном боте.",
+                    reply_markup=UnauthorizedKeyboard.get_markup()
                 )
-            await UserStates.ACCESS.set()
-        else:
-            # ИЗМЕНЕНИЕ: Сразу переходим к инвестиционному анализу без выбора темы
-            await message.answer('Здравствуйте! Добро пожаловать в бот для анализа инвестиционной привлекательности.\n\nВведите название компании или опишите ваш запрос для анализа.')
-            
-            # Автоматически устанавливаем тему как investment
-            system_prompts = SystemPrompts()
-            system_prompt = system_prompts.get_prompt(SystemPrompt.INVESTMENT)
-            
-            chat_context.start_new_chat(user_id, 'investment', system_prompt)
-            
-            # Устанавливаем состояние прямо в ввод промпта для инвестиционного анализа
-            await UserStates.ENTERING_PROMPT.set()
+                return
+        
+        except Exception as e:
+            logger.error(f"Ошибка проверки авторизации для пользователя {user_id}: {e}")
+            await message.answer(
+                "⚠️ Временные технические неполадки.\n"
+                "Попробуйте авторизоваться в главном боте или обратитесь к администратору.",
+                reply_markup=UnauthorizedKeyboard.get_markup()
+            )
+            return
+        
+        # ЕСЛИ АВТОРИЗОВАН - обычная работа
+        logger.info(f'✅ Пользователь {user_id} авторизован - продолжаем работу')
+
+        # УДАЛЯЕМ СТАРУЮ ПРОВЕРКУ config.AUTHORIZED_USERS_IDS
+        # if user_id not in config.AUTHORIZED_USERS_IDS:
+        #     ... старый код авторизации ...
+
+        # ОСТАВЛЯЕМ ТОЛЬКО ЭТУ ЧАСТЬ:
+        await message.answer('Здравствуйте! Добро пожаловать в бот для анализа инвестиционной привлекательности.\n\nВведите название компании или опишите ваш запрос для анализа.')
+        
+        # Автоматически устанавливаем тему как investment
+        system_prompts = SystemPrompts()
+        system_prompt = system_prompts.get_prompt(SystemPrompt.INVESTMENT)
+        
+        chat_context.start_new_chat(user_id, 'investment', system_prompt)
+        
+        # Устанавливаем состояние прямо в ввод промпта для инвестиционного анализа
+        await UserStates.ENTERING_PROMPT.set()
 
     def register(self, dp: Dispatcher) -> None:
         dp.register_message_handler(self.process, commands=['start'], state='*')
@@ -2759,13 +2795,26 @@ class BotManager:
 
 
 if __name__ == '__main__':
+    from aiogram import executor
+    
+    async def on_startup(dp):
+        """Инициализация при запуске бота"""
+        try:
+            config = Config()
+            sql_connection = config.SQL_CONNECTION_STRING_READER
+            await init_auth_system(sql_connection)
+            logger.info("✅ Система авторизации инициализирована")
+        except Exception as e:
+            logger.error(f"❌ Ошибка инициализации авторизации: {e}")
+
     config = Config()
     bot = Bot(token=config.TOKEN)
     dp = Dispatcher(bot, storage=MemoryStorage())
 
     BotManager(bot, dp)
 
-    executor.start_polling(dp, skip_updates=True)
+    # Запуск с инициализацией авторизации
+    executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
 
 
 
