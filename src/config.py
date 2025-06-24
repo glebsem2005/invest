@@ -103,3 +103,11 @@ class Config:
     @property
     def SENDER_NAME(self) -> str:
         return os.getenv('SENDER_NAME', 'Investment Analysis Bot')
+
+    @property
+    def SQL_CONNECTION_STRING_READER(self) -> str:
+        SQL_CONNECTION_STRING_READER = os.getenv('SQL_CONNECTION_STRING_READER')
+        if SQL_CONNECTION_STRING_READER:
+            return str(SQL_CONNECTION_STRING_READER)
+        # Fallback to hardcoded value
+        return "postgresql://bot_reader:reader123@172.20.10.13:5432/сбербот"
