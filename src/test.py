@@ -7,9 +7,9 @@ async def test_connection():
         
         # Попробуйте разные варианты строки подключения
         connection_strings = [
-            "postgresql://bot_reader:reader123@172.20.10.13:5432/сбербот",
-            "postgresql://bot_reader:reader123@172.20.10.13:5432/сбер_bot", 
-            "postgresql://bot_reader:reader123@172.20.10.13:5432/sber_bot",
+            "postgresql://bot_reader:sber@172.20.10.13:5432/sber_bot",
+            "postgresql://bot_reader:sber@172.20.10.13:5432/sber_bot", 
+            "postgresql://bot_reader:sber@172.20.10.13:5432/sber_bot",
         ]
         
         for conn_str in connection_strings:
