@@ -454,72 +454,72 @@ class InvestmentAnalysisProcessor:
             return Models.chatgpt.value()  # По умолчанию при ошибке
 
     async def parse_user_request(self, user_text: str) -> Dict[str, Any]:
-    """Парсит запрос пользователя и определяет параметры анализа."""
-    try:
-        model_api = ModelAPI(Models.chatgpt.value())
-        messages = [
-            {"role": "system", "content": "Ты помощник для извлечения названий компаний из текста. Отвечай только валидным JSON без лишнего текста."},
-            {"role": "user", "content": self.analysis_prompt.format(user_text=user_text)}
-        ]
+        """Парсит запрос пользователя и определяет параметры анализа."""
+        try:
+            model_api = ModelAPI(Models.chatgpt.value())
+            messages = [
+                {"role": "system", "content": "Ты помощник для извлечения названий компаний из текста. Отвечай только валидным JSON без лишнего текста."},
+                {"role": "user", "content": self.analysis_prompt.format(user_text=user_text)}
+            ]
         
-        response = await model_api.get_response(messages)
-        logger.info(f"Raw response from GPT: '{response}'")
+            response = await model_api.get_response(messages)
+            logger.info(f"Raw response from GPT: '{response}'")
         
         # Очищаем ответ от лишних символов
-        cleaned_response = response.strip()
+            cleaned_response = response.strip()
         
         # Пытаемся найти JSON в ответе более надежным способом
-        json_patterns = [
-            r'\{[^{}]*"name"[^{}]*"[^"]*"[^{}]*\}',  # JSON с name в кавычках
-            r'```json\s*(\{.*?\})\s*```',  # JSON в блоке кода
-            r'```\s*(\{.*?\})\s*```',  # JSON в блоке без указания языка
-            r'\{.*?"name".*?\}',  # JSON содержащий name
-            r'\{.*\}',  # Любой JSON
-        ]
+            json_patterns = [
+                r'\{[^{}]*"name"[^{}]*"[^"]*"[^{}]*\}',  # JSON с name в кавычках
+                r'```json\s*(\{.*?\})\s*```',  # JSON в блоке кода
+                r'```\s*(\{.*?\})\s*```',  # JSON в блоке без указания языка
+                r'\{.*?"name".*?\}',  # JSON содержащий name
+                r'\{.*\}',  # Любой JSON
+            ]
         
-        result = None
-        for i, pattern in enumerate(json_patterns):
-            matches = re.findall(pattern, cleaned_response, re.DOTALL | re.IGNORECASE)
-            for match in matches:
-                try:
-                    json_text = match if isinstance(match, str) else match
+            result = None
+            for i, pattern in enumerate(json_patterns):
+                matches = re.findall(pattern, cleaned_response, re.DOTALL | re.IGNORECASE)
+                for match in matches:
+                    try:
+                        json_text = match if isinstance(match, str) else match
                     # Дополнительная очистка
-                    json_text = json_text.strip().replace('\n', ' ').replace('\r', '')
-                    logger.info(f"Trying to parse pattern {i}: '{json_text}'")
-                    result = json.loads(json_text)
-                    logger.info(f"Successfully parsed JSON: {result}")
+                        json_text = json_text.strip().replace('\n', ' ').replace('\r', '')
+                        logger.info(f"Trying to parse pattern {i}: '{json_text}'")
+                        result = json.loads(json_text)
+                        logger.info(f"Successfully parsed JSON: {result}")
+                        break
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"JSON decode error for pattern {i}: {e}, text: '{json_text}'")
+                        continue
+                if result:
                     break
-                except json.JSONDecodeError as e:
-                    logger.warning(f"JSON decode error for pattern {i}: {e}, text: '{json_text}'")
-                    continue
-            if result:
-                break
         
-        if result and "name" in result:
+            if result and "name" in result:
             # Проверяем, что название компании не пустое
-            if result["name"] and result["name"].strip() != "":
+                if result["name"] and result["name"].strip() != "":
                 # Убеждаемся что все нужные поля присутствуют
-                final_result = {
-                    "name": result.get("name", "неизвестная_компания"),
-                    "market": result.get("market", 1),
-                    "rivals": result.get("rivals", 1), 
-                    "synergy": result.get("synergy", 1)
-                }
-                logger.info(f"Final parsed result: {final_result}")
-                return final_result
+                    final_result = {
+                        "name": result.get("name", "неизвестная_компания"),
+                        "market": result.get("market", 1),
+                        "rivals": result.get("rivals", 1), 
+                        "synergy": result.get("synergy", 1)
+                    }
+                    logger.info(f"Final parsed result: {final_result}")
+                    return final_result
         
         # Если не удалось распарсить, логируем и используем fallback
-        logger.warning(f"Could not parse JSON from response: '{response}'. Using manual extraction.")
+            logger.warning(f"Could not parse JSON from response: '{response}'. Using manual extraction.")
         
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON decode error: {e}, response was: '{response}'")
-    except Exception as e:
-        logger.error(f"Unexpected error parsing user request: {e}")
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}, response was: '{response}'")
+        except Exception as e:
+            logger.error(f"Unexpected error parsing user request: {e}")
     
     # Fallback: простой результат без ручного извлечения
-    fallback_result = {"name": "неизвестная_компания", "market": 1, "rivals": 1, "synergy": 1}
-    logger.info(f"Using fallback result: {fallback_result}")
-    return fallback_result
+        fallback_result = {"name": "неизвестная_компания", "market": 1, "rivals": 1, "synergy": 1}
+        logger.info(f"Using fallback result: {fallback_result}")
+        return fallback_result
 
     async def run_analysis(self, analysis_params: Dict[str, Any], file_content: str = "") -> Dict[str, str]:
         results = {}
