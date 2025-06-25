@@ -165,3 +165,27 @@ class SystemPrompts:
         """Устанавливает содержимое промпта."""
         logger.debug(f'Установка содержимого промпта {prompt_type.name}')
         self.update_prompt(prompt_type, content)
+
+
+    def set_prompt_file(self, filename: str, content: str) -> None:
+        """Сохраняет содержимое в файл промпта."""
+        try:
+            file_path = DEFAULT_PROMPTS_DIR / filename
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            logger.info(f'Файл {filename} успешно сохранен')
+        except Exception as e:
+            logger.error(f'Ошибка при сохранении файла {filename}: {e}')
+            raise
+
+    def get_prompt_if_exists(self, prompt_key: str) -> str:
+        """Получает промпт если он существует, иначе возвращает None."""
+        try:
+            file_path = DEFAULT_PROMPTS_DIR / f'{prompt_key}.txt'
+            if file_path.exists():
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    return f.read().strip()
+            return None
+        except Exception as e:
+            logger.warning(f'Ошибка при чтении файла {prompt_key}: {e}')
+            return None
