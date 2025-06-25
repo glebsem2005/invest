@@ -105,9 +105,23 @@ class Config:
         return os.getenv('SENDER_NAME', 'Investment Analysis Bot')
 
     @property
+    def SQL_CONNECTION_STRING(self) -> str:
+        """
+        Database connection string for admin bot (full permissions)
+        """
+        SQL_CONNECTION_STRING = os.getenv('SQL_CONNECTION_STRING')
+        if SQL_CONNECTION_STRING:
+            return str(SQL_CONNECTION_STRING)
+        # Fallback to hardcoded value
+        return "postgresql://postgres:jNtiIokjoySRemHIhgvjunFtmBLaRYLr@switchyard.proxy.rlwy.net:17143/railway"
+
+    @property
     def SQL_CONNECTION_STRING_READER(self) -> str:
+        """
+        Database connection string for reader bots (read-only permissions)
+        """
         SQL_CONNECTION_STRING_READER = os.getenv('SQL_CONNECTION_STRING_READER')
         if SQL_CONNECTION_STRING_READER:
             return str(SQL_CONNECTION_STRING_READER)
         # Fallback to hardcoded value
-        return "postgresql://bot_admin:sber@172.20.10.13:5432/sber_bot"
+        return "postgresql://postgres:jNtiIokjoySRemHIhgvjunFtmBLaRYLr@switchyard.proxy.rlwy.net:17143/railway"
