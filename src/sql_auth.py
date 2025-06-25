@@ -2,7 +2,6 @@ import asyncio
 import asyncpg
 import logging
 from typing import Optional
-
 logger = logging.getLogger(__name__)
 
 class SQLAuthChecker:
@@ -50,9 +49,9 @@ class SQLAuthChecker:
         
         try:
             async with self.pool.acquire() as conn:
-                # ТОЛЬКО проверяем есть ли пользователь в базе
+                # Проверяем есть ли пользователь в базе
                 result = await conn.fetchrow(
-                    "SELECT users_id FROM users WHERE users_id = $1",
+                    "SELECT user_id, email FROM authorized_users WHERE user_id = $1 AND is_active = TRUE",
                     user_id
                 )
                 
@@ -68,12 +67,43 @@ class SQLAuthChecker:
             # В случае ошибки БД - запрещаем доступ
             return False
     
+    async def get_user_email(self, user_id: int) -> Optional[str]:
+        """
+        НОВЫЙ МЕТОД: Получает email пользователя из базы данных
+        
+        Args:
+            user_id: Telegram ID пользователя
+            
+        Returns:
+            str: Email пользователя или None если не найден
+        """
+        if not self.pool:
+            logger.error("Нет подключения к базе данных")
+            return None
+        
+        try:
+            async with self.pool.acquire() as conn:
+                result = await conn.fetchrow(
+                    "SELECT email FROM authorized_users WHERE user_id = $1 AND is_active = TRUE",
+                    user_id
+                )
+                
+                if result and result['email']:
+                    logger.info(f"Email для пользователя {user_id}: {result['email']}")
+                    return result['email']
+                else:
+                    logger.warning(f"Email не найден для пользователя {user_id}")
+                    return None
+                    
+        except Exception as e:
+            logger.error(f"Ошибка получения email для пользователя {user_id}: {e}")
+            return None
+    
     async def close_pool(self):
         """Закрывает подключение к базе"""
         if self.pool:
             await self.pool.close()
             logger.info("Подключение к базе данных закрыто")
-
 
 # Глобальный экземпляр проверки авторизации
 auth_checker: Optional[SQLAuthChecker] = None
@@ -90,4 +120,9 @@ async def check_user_authorized(user_id: int) -> bool:
     if auth_checker:
         return await auth_checker.check_user_authorization(user_id)
     return False
-    
+
+async def get_user_email(user_id: int) -> Optional[str]:
+    """НОВАЯ ФУНКЦИЯ: Получает email пользователя"""
+    if auth_checker:
+        return await auth_checker.get_user_email(user_id)
+    return None
