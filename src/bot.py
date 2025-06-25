@@ -179,7 +179,10 @@ class AdminStates(StatesGroup):
     NEW_PROMPT_UPLOAD = State()  # Загрузка файла с системным промптом
     NEW_PROMPT_UPLOAD_DETAIL = State()  # Загрузка файла с детализированным промптом
     UPLOADING_SCOUTING_FILE = State()  # Загрузка excel файла для скаутинга
-    CHOOSING_AI_MODEL = State()  # НОВОЕ: Выбор AI модели
+    CHOOSING_AI_MODEL = State()  # ДОБАВИТЬ ЭТУ СТРОКУ
+
+
+
 
 
 class TopicKeyboard(DynamicKeyboard):
@@ -216,90 +219,6 @@ class ContinueKeyboard(Keyboard):
         Button('Завершить чат', 'continue_no'),
     )
 
-
-class AdminAIModelKeyboard(DynamicKeyboard):
-    """Клавиатура для выбора AI модели администратором."""
-
-    @classmethod
-    def get_buttons(cls) -> Tuple[Button, ...]:
-        """Генерирует кнопки на основе доступных моделей."""
-        buttons = []
-        
-        for model_name, model in Models.__members__.items():
-            buttons.append(Button(text=f"Модель: {model_name.upper()}", callback=f'ai_model_{model_name}'))
-
-        return tuple(buttons)
-
-
-class AdminSetAIModelHandler(BaseScenario):
-    """Обработка команды администратора для установки AI модели."""
-
-    async def process(self, message: types.Message, **kwargs) -> None:
-        user_id = message.from_user.id
-        logger.info(f'Запрос на установку AI модели от пользователя {user_id}')
-
-        if user_id not in config.ADMIN_USERS:
-            logger.warning(f'Отказано в доступе пользователю {user_id} - не является администратором')
-            await message.answer('У вас нет прав для выполнения этой команды.')
-            return
-
-        await message.answer('Выберите AI модель для инвестиционного анализа:', reply_markup=AdminAIModelKeyboard())
-        await AdminStates.CHOOSING_AI_MODEL.set()
-        logger.info(f'Пользователь {user_id} переведен в режим выбора AI модели')
-
-    def register(self, dp: Dispatcher) -> None:
-        dp.register_message_handler(
-            self.process,
-            commands=['set_ai_model'],
-            state='*',
-        )
-
-
-class AdminChooseAIModelCallback(BaseScenario):
-    """Обработка выбора AI модели."""
-
-    async def process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
-        user_id = callback_query.from_user.id
-        model_callback = callback_query.data
-        model_name = model_callback.replace('ai_model_', '')
-
-        await callback_query.answer()
-
-        logger.info(f'Администратор {user_id} выбрал AI модель {model_name}')
-
-        try:
-            # Проверяем, что модель существует
-            if not hasattr(Models, model_name):
-                await callback_query.message.edit_text(f"Ошибка: модель '{model_name}' не найдена.")
-                await state.finish()
-                return
-
-            # Сохраняем выбранную модель в конфигурацию
-            system_prompts = SystemPrompts()
-            system_prompts.set_prompt_file('AI_MODEL_CONFIG.txt', model_name)
-            
-            logger.info(f'AI модель изменена на {model_name} администратором {user_id}')
-
-            await callback_query.message.edit_text(f"AI модель успешно изменена на: {model_name.upper()}")
-
-        except Exception as e:
-            logger.error(f'Ошибка при установке AI модели: {e}', exc_info=True)
-            await callback_query.message.edit_text(
-                'Произошла ошибка при установке AI модели.\nСообщение об ошибке уже отправлено разработчику.'
-            )
-            await self.bot.send_message(
-                chat_id=config.OWNER_ID,
-                text=f'Произошла ошибка при установке AI модели: {e}',
-            )
-
-        await state.finish()
-
-    def register(self, dp: Dispatcher) -> None:
-        dp.register_callback_query_handler(
-            self.process,
-            lambda c: c.data.startswith('ai_model_'),
-            state=AdminStates.CHOOSING_AI_MODEL,
-        )
 
 class AuthorizeKeyboard(Keyboard):
     """Клавиатура для авторизации."""
@@ -1375,6 +1294,90 @@ class InvestmentQAHandler(BaseScenario):
             state=UserStates.INVESTMENT_QA,
         )
 
+
+class AdminAIModelKeyboard(DynamicKeyboard):
+    """Клавиатура для выбора AI модели администратором."""
+
+    @classmethod
+    def get_buttons(cls) -> Tuple[Button, ...]:
+        """Генерирует кнопки на основе доступных моделей."""
+        buttons = []
+        
+        for model_name, model in Models.__members__.items():
+            buttons.append(Button(text=f"Модель: {model_name.upper()}", callback=f'ai_model_{model_name}'))
+
+        return tuple(buttons)
+
+
+class AdminSetAIModelHandler(BaseScenario):
+    """Обработка команды администратора для установки AI модели."""
+
+    async def process(self, message: types.Message, **kwargs) -> None:
+        user_id = message.from_user.id
+        logger.info(f'Запрос на установку AI модели от пользователя {user_id}')
+
+        if user_id not in config.ADMIN_USERS:
+            logger.warning(f'Отказано в доступе пользователю {user_id} - не является администратором')
+            await message.answer('У вас нет прав для выполнения этой команды.')
+            return
+
+        await message.answer('Выберите AI модель для инвестиционного анализа:', reply_markup=AdminAIModelKeyboard())
+        await AdminStates.CHOOSING_AI_MODEL.set()
+        logger.info(f'Пользователь {user_id} переведен в режим выбора AI модели')
+
+    def register(self, dp: Dispatcher) -> None:
+        dp.register_message_handler(
+            self.process,
+            commands=['set_ai_model'],
+            state='*',
+        )
+
+
+class AdminChooseAIModelCallback(BaseScenario):
+    """Обработка выбора AI модели."""
+
+    async def process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
+        user_id = callback_query.from_user.id
+        model_callback = callback_query.data
+        model_name = model_callback.replace('ai_model_', '')
+
+        await callback_query.answer()
+
+        logger.info(f'Администратор {user_id} выбрал AI модель {model_name}')
+
+        try:
+            # Проверяем, что модель существует
+            if not hasattr(Models, model_name):
+                await callback_query.message.edit_text(f"Ошибка: модель '{model_name}' не найдена.")
+                await state.finish()
+                return
+
+            # Сохраняем выбранную модель в конфигурацию
+            system_prompts = SystemPrompts()
+            system_prompts.set_prompt_file('AI_MODEL_CONFIG.txt', model_name)
+            
+            logger.info(f'AI модель изменена на {model_name} администратором {user_id}')
+
+            await callback_query.message.edit_text(f"AI модель успешно изменена на: {model_name.upper()}")
+
+        except Exception as e:
+            logger.error(f'Ошибка при установке AI модели: {e}', exc_info=True)
+            await callback_query.message.edit_text(
+                'Произошла ошибка при установке AI модели.\nСообщение об ошибке уже отправлено разработчику.'
+            )
+            await self.bot.send_message(
+                chat_id=config.OWNER_ID,
+                text=f'Произошла ошибка при установке AI модели: {e}',
+            )
+
+        await state.finish()
+
+    def register(self, dp: Dispatcher) -> None:
+        dp.register_callback_query_handler(
+            self.process,
+            lambda c: c.data.startswith('ai_model_'),
+            state=AdminStates.CHOOSING_AI_MODEL,
+        )
 
 class BackToInvestmentActionsHandler(BaseScenario):
     """Возврат к выбору действий инвестиционного анализа."""
