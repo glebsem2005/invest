@@ -1381,15 +1381,8 @@ class InvestmentReportHandler(BaseScenario):
         if action == 'investment_download':
             await self._download_report(callback_query, state, user_data)
         elif action == 'investment_email':
-            if not self.email_sender.email_user or not self.email_sender.email_password:
-                await callback_query.message.edit_text(
-                    '❌ Отправка на email временно недоступна. Воспользуйтесь скачиванием отчета.',
-                    reply_markup=InvestmentReportKeyboard()
-                )
-                return
-                
-            await callback_query.message.edit_text('Введите ваш email для отправки отчета:')
-            await UserStates.ENTERING_EMAIL.set()
+            # ИЗМЕНЕНИЕ: Получаем email из БД автоматически
+            await self._send_email_report(callback_query, state, user_data)
         elif action == 'investment_back_to_actions':
             await callback_query.message.edit_text(
                 'Что бы вы хотели сделать дальше?',
@@ -1424,7 +1417,7 @@ class InvestmentReportHandler(BaseScenario):
             
             os.unlink(final_report_path)
             
-            # ГЛАВНОЕ ИЗМЕНЕНИЕ: Показываем финальные кнопки вместо возврата к действиям
+            # Показываем финальные кнопки
             await callback_query.message.answer(
                 'Отчет готов! Что бы вы хотели сделать дальше?',
                 reply_markup=FinalActionsKeyboard()
@@ -1434,43 +1427,32 @@ class InvestmentReportHandler(BaseScenario):
         except Exception as e:
             await self.handle_error(callback_query.message, e, "report_generation")
 
-    def register(self, dp: Dispatcher) -> None:
-        logger.info("=== REGISTERING InvestmentReportHandler ===")
-        dp.register_callback_query_handler(
-            lambda c, state: self.process(c, state),
-            lambda c: c.data in ['investment_download', 'investment_email', 'investment_back_to_actions'],
-            state=UserStates.INVESTMENT_REPORT_OPTIONS,
-        )
-        logger.info("=== InvestmentReportHandler REGISTERED ===")
-
-class EmailInputHandler(BaseScenario):
-    """Обработка ввода email для отправки отчета."""
-
-    def __init__(self, bot):
-        super().__init__(bot)
-        self.email_sender = EmailSender()
-
-    async def process(self, *args, **kwargs) -> None:
-        if args:
-            message = args[0]
-            state = args[1] if len(args) > 1 else kwargs.get('state')
-        else:
-            message = kwargs.get('message')
-            state = kwargs.get('state')
-            
-        if not message or not state:
-            logger.error("EmailInputHandler: missing message or state parameter")
-            return
-            
-        email = message.text.strip()
-        user_data = await state.get_data()
+    async def _send_email_report(self, callback_query, state, user_data):
+        """НОВЫЙ МЕТОД: Автоматически отправляет отчет на email из БД."""
+        user_id = callback_query.from_user.id
         
-        if '@' not in email or '.' not in email:
-            await message.answer('❌ Некорректный email. Введите правильный email:')
+        if not self.email_sender.email_user or not self.email_sender.email_password:
+            await callback_query.message.edit_text(
+                '❌ Отправка на email временно недоступна. Воспользуйтесь скачиванием отчета.',
+                reply_markup=InvestmentReportKeyboard()
+            )
             return
         
         try:
-            await message.answer('Генерирую и отправляю отчет на почту...')
+            await callback_query.message.edit_text('🔍 Получаю ваш email из базы данных...')
+            
+            # Получаем email пользователя из sql_auth
+            user_email = await self._get_user_email_from_db(user_id)
+            
+            if not user_email:
+                await callback_query.message.edit_text(
+                    '❌ Не удалось получить ваш email из базы данных.\n'
+                    'Воспользуйтесь скачиванием отчета.',
+                    reply_markup=InvestmentReportKeyboard()
+                )
+                return
+            
+            await callback_query.message.edit_text(f'📧 Генерирую и отправляю отчет на {user_email}...')
             
             processor = InvestmentAnalysisProcessor()
             company_name = user_data.get('company_name', 'unknown_company')
@@ -1486,13 +1468,8 @@ class EmailInputHandler(BaseScenario):
                 safe_company_name = "unknown_company"
             report_filename = f'investment_analysis_{safe_company_name}_final.docx'
             
-            if not hasattr(self.email_sender, 'send_report'):
-                logger.error("EmailSender doesn't have send_report method!")
-                await message.answer('❌ Ошибка конфигурации email. Обратитесь к администратору.')
-                return
-            
             success = await self.email_sender.send_report(
-                email, 
+                user_email, 
                 company_name, 
                 final_report_path,
                 filename=report_filename
@@ -1502,28 +1479,50 @@ class EmailInputHandler(BaseScenario):
                 os.unlink(final_report_path)
             
             if success:
-                await message.answer(f'✅ Отчет успешно отправлен на {email}')
+                await callback_query.message.edit_text(f'✅ Отчет успешно отправлен на {user_email}')
             else:
-                await message.answer(f'❌ Не удалось отправить отчет на {email}. Попробуйте скачать отчет.')
+                await callback_query.message.edit_text(
+                    f'❌ Не удалось отправить отчет на {user_email}.\n'
+                    'Попробуйте скачать отчет.'
+                )
             
-            # ИЗМЕНЕНИЕ: После email тоже показываем финальные кнопки
-            await message.answer(
+            # Показываем финальные кнопки
+            await callback_query.message.answer(
                 'Что бы вы хотели сделать дальше?',
                 reply_markup=FinalActionsKeyboard()
             )
             await UserStates.CHOOSING_FINAL_ACTION.set()
             
         except Exception as e:
-            await self.handle_error(message, e, "email_sending")
+            await self.handle_error(callback_query.message, e, "email_sending")
+
+    async def _get_user_email_from_db(self, user_id: int) -> str:
+        """Получает email пользователя из базы данных через sql_auth."""
+        try:
+            # УПРОЩЕННЫЙ МЕТОД: используем функцию get_user_email из sql_auth
+            from sql_auth import get_user_email
+            
+            user_email = await get_user_email(user_id)
+            
+            if user_email:
+                logger.info(f"Email для пользователя {user_id}: {user_email}")
+                return user_email
+            else:
+                logger.warning(f"Email не найден для пользователя {user_id}")
+                return None
+                    
+        except Exception as e:
+            logger.error(f"Ошибка получения email для пользователя {user_id}: {e}")
+            return None
 
     def register(self, dp: Dispatcher) -> None:
-        logger.info("=== REGISTERING EmailInputHandler ===")
-        dp.register_message_handler(
-            lambda message, state: self.process(message, state),
-            content_types=['text'],
-            state=UserStates.ENTERING_EMAIL,
+        logger.info("=== REGISTERING InvestmentReportHandler ===")
+        dp.register_callback_query_handler(
+            lambda c, state: self.process(c, state),
+            lambda c: c.data in ['investment_download', 'investment_email', 'investment_back_to_actions'],
+            state=UserStates.INVESTMENT_REPORT_OPTIONS,
         )
-        logger.info("=== EmailInputHandler REGISTERED ===")
+        logger.info("=== InvestmentReportHandler REGISTERED ===")
 
 class FinalActionsHandler(BaseScenario):
     """Обработка финальных действий после получения отчета."""
@@ -2815,6 +2814,7 @@ if __name__ == '__main__':
 
     # Запуск с инициализацией авторизации
     executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
+
 
 
 
