@@ -84,7 +84,7 @@ class SQLAuthChecker:
         try:
             async with self.pool.acquire() as conn:
                 result = await conn.fetchrow(
-                    "SELECT email FROM authorized_users WHERE user_id = $1 AND is_active = TRUE",
+                    "SELECT email FROM users WHERE users_id = $1",
                     user_id
                 )
                 
