@@ -179,6 +179,7 @@ class AdminStates(StatesGroup):
     NEW_PROMPT_UPLOAD = State()  # Загрузка файла с системным промптом
     NEW_PROMPT_UPLOAD_DETAIL = State()  # Загрузка файла с детализированным промптом
     UPLOADING_SCOUTING_FILE = State()  # Загрузка excel файла для скаутинга
+    CHOOSING_AI_MODEL = State()  # НОВОЕ: Выбор AI модели
 
 
 class TopicKeyboard(DynamicKeyboard):
@@ -215,6 +216,90 @@ class ContinueKeyboard(Keyboard):
         Button('Завершить чат', 'continue_no'),
     )
 
+
+class AdminAIModelKeyboard(DynamicKeyboard):
+    """Клавиатура для выбора AI модели администратором."""
+
+    @classmethod
+    def get_buttons(cls) -> Tuple[Button, ...]:
+        """Генерирует кнопки на основе доступных моделей."""
+        buttons = []
+        
+        for model_name, model in Models.__members__.items():
+            buttons.append(Button(text=f"Модель: {model_name.upper()}", callback=f'ai_model_{model_name}'))
+
+        return tuple(buttons)
+
+
+class AdminSetAIModelHandler(BaseScenario):
+    """Обработка команды администратора для установки AI модели."""
+
+    async def process(self, message: types.Message, **kwargs) -> None:
+        user_id = message.from_user.id
+        logger.info(f'Запрос на установку AI модели от пользователя {user_id}')
+
+        if user_id not in config.ADMIN_USERS:
+            logger.warning(f'Отказано в доступе пользователю {user_id} - не является администратором')
+            await message.answer('У вас нет прав для выполнения этой команды.')
+            return
+
+        await message.answer('Выберите AI модель для инвестиционного анализа:', reply_markup=AdminAIModelKeyboard())
+        await AdminStates.CHOOSING_AI_MODEL.set()
+        logger.info(f'Пользователь {user_id} переведен в режим выбора AI модели')
+
+    def register(self, dp: Dispatcher) -> None:
+        dp.register_message_handler(
+            self.process,
+            commands=['set_ai_model'],
+            state='*',
+        )
+
+
+class AdminChooseAIModelCallback(BaseScenario):
+    """Обработка выбора AI модели."""
+
+    async def process(self, callback_query: types.CallbackQuery, state: FSMContext, **kwargs) -> None:
+        user_id = callback_query.from_user.id
+        model_callback = callback_query.data
+        model_name = model_callback.replace('ai_model_', '')
+
+        await callback_query.answer()
+
+        logger.info(f'Администратор {user_id} выбрал AI модель {model_name}')
+
+        try:
+            # Проверяем, что модель существует
+            if not hasattr(Models, model_name):
+                await callback_query.message.edit_text(f"Ошибка: модель '{model_name}' не найдена.")
+                await state.finish()
+                return
+
+            # Сохраняем выбранную модель в конфигурацию
+            system_prompts = SystemPrompts()
+            system_prompts.set_prompt_file('AI_MODEL_CONFIG.txt', model_name)
+            
+            logger.info(f'AI модель изменена на {model_name} администратором {user_id}')
+
+            await callback_query.message.edit_text(f"AI модель успешно изменена на: {model_name.upper()}")
+
+        except Exception as e:
+            logger.error(f'Ошибка при установке AI модели: {e}', exc_info=True)
+            await callback_query.message.edit_text(
+                'Произошла ошибка при установке AI модели.\nСообщение об ошибке уже отправлено разработчику.'
+            )
+            await self.bot.send_message(
+                chat_id=config.OWNER_ID,
+                text=f'Произошла ошибка при установке AI модели: {e}',
+            )
+
+        await state.finish()
+
+    def register(self, dp: Dispatcher) -> None:
+        dp.register_callback_query_handler(
+            self.process,
+            lambda c: c.data.startswith('ai_model_'),
+            state=AdminStates.CHOOSING_AI_MODEL,
+        )
 
 class AuthorizeKeyboard(Keyboard):
     """Клавиатура для авторизации."""
@@ -433,79 +518,28 @@ class InvestmentAnalysisProcessor:
 Будь конкретным и структурированным в ответе.
 """
 
-    async def parse_user_request(self, user_text: str) -> Dict[str, Any]:
-        """Парсит запрос пользователя и определяет параметры анализа."""
+    # НОВЫЙ МЕТОД для получения модели AI
+    def _get_ai_model(self):
+        """Получает настроенную модель AI из конфигурации."""
+        # Попробуем получить из конфигурации, если не получается - используем ChatGPT по умолчанию
         try:
-            model_api = ModelAPI(Models.chatgpt.value())
-            messages = [
-                {"role": "system", "content": "Ты помощник для извлечения названий компаний из текста. Отвечай только валидным JSON без лишнего текста."},
-                {"role": "user", "content": self.analysis_prompt.format(user_text=user_text)}
-            ]
-            
-            response = await model_api.get_response(messages)
-            logger.info(f"Raw response from GPT: '{response}'")
-            
-            # Очищаем ответ от лишних символов
-            cleaned_response = response.strip()
-            
-            # Пытаемся найти JSON в ответе более надежным способом
-            json_patterns = [
-                r'\{[^{}]*"name"[^{}]*"[^"]*"[^{}]*\}',  # JSON с name в кавычках
-                r'```json\s*(\{.*?\})\s*```',  # JSON в блоке кода
-                r'```\s*(\{.*?\})\s*```',  # JSON в блоке без указания языка
-                r'\{.*?"name".*?\}',  # JSON содержащий name
-                r'\{.*\}',  # Любой JSON
-            ]
-            
-            result = None
-            for i, pattern in enumerate(json_patterns):
-                matches = re.findall(pattern, cleaned_response, re.DOTALL | re.IGNORECASE)
-                for match in matches:
-                    try:
-                        json_text = match if isinstance(match, str) else match
-                        # Дополнительная очистка
-                        json_text = json_text.strip().replace('\n', ' ').replace('\r', '')
-                        logger.info(f"Trying to parse pattern {i}: '{json_text}'")
-                        result = json.loads(json_text)
-                        logger.info(f"Successfully parsed JSON: {result}")
-                        break
-                    except json.JSONDecodeError as e:
-                        logger.warning(f"JSON decode error for pattern {i}: {e}, text: '{json_text}'")
-                        continue
-                if result:
-                    break
-            
-            if result and "name" in result:
-                # Проверяем, что название компании не пустое
-                if result["name"] and result["name"].strip() != "":
-                    # Убеждаемся что все нужные поля присутствуют
-                    final_result = {
-                        "name": result.get("name", "неизвестная_компания"),
-                        "market": result.get("market", 1),
-                        "rivals": result.get("rivals", 1), 
-                        "synergy": result.get("synergy", 1)
-                    }
-                    logger.info(f"Final parsed result: {final_result}")
-                    return final_result
-            
-            # Если не удалось распарсить, логируем и используем fallback
-            logger.warning(f"Could not parse JSON from response: '{response}'. Using manual extraction.")
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error: {e}, response was: '{response}'")
-        except Exception as e:
-            logger.error(f"Unexpected error parsing user request: {e}")
-        
-        # Fallback: простой результат без ручного извлечения
-        fallback_result = {"name": "неизвестная_компания", "market": 1, "rivals": 1, "synergy": 1}
-        logger.info(f"Using fallback result: {fallback_result}")
-        return fallback_result
-    
+            system_prompts = SystemPrompts()
+            ai_model_config = system_prompts.get_prompt_if_exists('AI_MODEL_CONFIG')
+            if ai_model_config:
+                # Ожидаем формат: "chatgpt" или "claude" и т.д.
+                model_name = ai_model_config.strip().lower()
+                if hasattr(Models, model_name):
+                    return Models[model_name].value()
+            return Models.chatgpt.value()  # По умолчанию
+        except:
+            return Models.chatgpt.value()  # По умолчанию при ошибке
 
     async def run_analysis(self, analysis_params: Dict[str, Any], file_content: str = "") -> Dict[str, str]:
         results = {}
         system_prompts = SystemPrompts()
-        model_api = ModelAPI(Models.chatgpt.value())
+        
+        # ИЗМЕНЕНИЕ: Используем настроенную модель вместо хардкода
+        model_api = ModelAPI(self._get_ai_model())
         
         company_name = analysis_params.get("name", "unknown_company")
         
@@ -514,7 +548,10 @@ class InvestmentAnalysisProcessor:
         if file_content:
             additional_context = f"\n\nДополнительная информация из файла:\n{file_content}"
         
-        # Запускаем анализы согласно параметрам
+        # ИЗМЕНЕНИЕ: Добавляем контекст между анализами
+        analysis_context = ""
+        
+        # Запускаем анализы согласно параметрам В ПРАВИЛЬНОМ ПОРЯДКЕ
         if analysis_params.get("market", 0):
             try:
                 # Получаем промпт как строку
@@ -523,16 +560,23 @@ class InvestmentAnalysisProcessor:
                 # Парсим классический промпт
                 parsed_prompt = self._parse_classical_prompt(market_prompt_raw)
                 
+                # ИЗМЕНЕНИЕ: Добавляем ограничение на 300 слов
+                system_content = parsed_prompt["role"] + "\n\nОТВЕТ ДОЛЖЕН БЫТЬ СТРОГО НЕ БОЛЕЕ 300 СЛОВ."
+                
                 # Подставляем название компании
                 user_content = parsed_prompt["prompt"].replace("[название компании]", company_name)
                 full_user_content = user_content + additional_context
                 
                 messages = [
-                    {"role": "system", "content": parsed_prompt["role"]},
+                    {"role": "system", "content": system_content},
                     {"role": "user", "content": full_user_content}
                 ]
                 
                 results["market"] = await model_api.get_response(messages)
+                
+                # ИЗМЕНЕНИЕ: Добавляем результат в контекст для следующих анализов
+                analysis_context += f"\n\nРезультат рыночного анализа компании {company_name}:\n{results['market']}"
+                
                 logger.info("Market analysis completed")
             except Exception as e:
                 logger.error(f"Error in market analysis: {e}")
@@ -546,16 +590,24 @@ class InvestmentAnalysisProcessor:
                 # Парсим классический промпт
                 parsed_prompt = self._parse_classical_prompt(rivals_prompt_raw)
                 
+                # ИЗМЕНЕНИЕ: Добавляем ограничение на 300 слов + контекст
+                system_content = parsed_prompt["role"] + "\n\nОТВЕТ ДОЛЖЕН БЫТЬ СТРОГО НЕ БОЛЕЕ 300 СЛОВ."
+                
                 # Подставляем название компании
                 user_content = parsed_prompt["prompt"].replace("[название компании]", company_name)
-                full_user_content = user_content + additional_context
+                # ИЗМЕНЕНИЕ: Добавляем контекст предыдущего анализа
+                full_user_content = user_content + additional_context + analysis_context
                 
                 messages = [
-                    {"role": "system", "content": parsed_prompt["role"]},
+                    {"role": "system", "content": system_content},
                     {"role": "user", "content": full_user_content}
                 ]
                 
                 results["rivals"] = await model_api.get_response(messages)
+                
+                # ИЗМЕНЕНИЕ: Добавляем результат в контекст для следующих анализов
+                analysis_context += f"\n\nРезультат анализа конкурентов компании {company_name}:\n{results['rivals']}"
+                
                 logger.info("Rivals analysis completed")
             except Exception as e:
                 logger.error(f"Error in rivals analysis: {e}")
@@ -568,20 +620,28 @@ class InvestmentAnalysisProcessor:
                 
                 # Проверяем формат промпта
                 if isinstance(synergy_prompt_raw, dict):
-                    system_content = synergy_prompt_raw.get("role", "")
+                    # ИЗМЕНЕНИЕ: Добавляем ограничение на 300 слов + контекст
+                    system_content = synergy_prompt_raw.get("role", "") + "\n\nОТВЕТ ДОЛЖЕН БЫТЬ СТРОГО НЕ БОЛЕЕ 300 СЛОВ."
                     user_content = synergy_prompt_raw.get("prompt", "")
                     user_content = user_content.replace("[название компании]", company_name)
-                    full_user_content = user_content + additional_context
+                    # ИЗМЕНЕНИЕ: Добавляем контекст всех предыдущих анализов
+                    full_user_content = user_content + additional_context + analysis_context
                     
                     messages = [
                         {"role": "system", "content": system_content},
                         {"role": "user", "content": full_user_content}
                     ]
                 elif isinstance(synergy_prompt_raw, str):
-                    full_prompt = synergy_prompt_raw.replace("[название компании]", company_name)
-                    full_prompt = full_prompt + additional_context
+                    # Парсим классический промпт
+                    parsed_prompt = self._parse_classical_prompt(synergy_prompt_raw)
+                    system_content = parsed_prompt["role"] + "\n\nОТВЕТ ДОЛЖЕН БЫТЬ СТРОГО НЕ БОЛЕЕ 300 СЛОВ."
+                    
+                    full_prompt = parsed_prompt["prompt"].replace("[название компании]", company_name)
+                    # ИЗМЕНЕНИЕ: Добавляем контекст всех предыдущих анализов
+                    full_prompt = full_prompt + additional_context + analysis_context
                     
                     messages = [
+                        {"role": "system", "content": system_content},
                         {"role": "user", "content": full_prompt}
                     ]
                 else:
@@ -2664,9 +2724,10 @@ class AdminHelpHandler(BaseScenario):
             'тип промпта (системный, детализированный или оба) и загрузить '
             'TXT-файл(ы) с новым содержимым.\n\n'
             '/new_prompt - Создание нового топика и системного промпта. Проведет через процесс создания '
-            'нового топика с указанием технического имени, отображаемого названия и загрузкой файла промпта.\n\n'
+            'нового топика с указанием технического имени, отображаемого названия и загрузки файла промпта.\n\n'
             '/load_prompts - Выгрузка всех системных промптов в виде TXT-файлов для просмотра или редактирования.\n\n'
             '/update_scouting_prompts - Обновление excel файла для темы "Скаутинг стартапов"\n\n'
+            '/set_ai_model - НОВОЕ: Выбор AI модели для инвестиционного анализа (ChatGPT, Claude и др.)\n\n'
             '/list_auth_users - Получить список id авторизованных пользователей.\n\n'
             '/start - Перезапуск бота и возврат к выбору темы анализа.'
         )
@@ -2698,7 +2759,6 @@ class BotManager:
     main_scenario = {
         'access': Access,
         'start': StartHandler,
-        # УБИРАЕМ: 'choose_topic': ProcessingChooseTopicCallback,
         'enter_prompt': ProcessingEnterPromptHandler,
         'attach_file': AttachFileHandler,
         'upload_file': UploadFileHandler,
@@ -2732,6 +2792,12 @@ class BotManager:
         'upload_scouting_excel': AdminUploadScoutingExcelFileHandler,
     }
 
+    # НОВОЕ: Добавляем сценарий для управления AI моделями
+    admin_ai_model_scenario = {
+        'set_ai_model': AdminSetAIModelHandler,
+        'choose_ai_model': AdminChooseAIModelCallback,
+    }
+
     admin_common_scenario = {
         'help': AdminHelpHandler,
         'auth_users_list': AdminListAuthUsersHandler,
@@ -2747,7 +2813,7 @@ class BotManager:
             'investment_qa': InvestmentQAHandler, 
             'back_to_investment_actions': BackToInvestmentActionsHandler, 
             'investment_report': InvestmentReportHandler, 
-            'final_actions': FinalActionsHandler,  # ДОБАВЛЯЕМ
+            'final_actions': FinalActionsHandler,
         } 
         logger.info(f"Investment analysis scenario created: {list(self.investment_analysis_scenario.keys())}") 
 
@@ -2756,10 +2822,11 @@ class BotManager:
         # Регистрируем все сценарии в правильном порядке
         all_scenarios = [
             ('main', self.main_scenario),
-            ('investment', self.investment_analysis_scenario),  # ПЕРЕМЕЩЕНО ВВЕРХ
+            ('investment', self.investment_analysis_scenario),
             ('admin_update', self.admins_update_system_prompts_scenario),
             ('admin_new', self.admin_new_system_prompts_scenario),
             ('admin_scouting', self.admin_update_scouting_excel),
+            ('admin_ai_model', self.admin_ai_model_scenario),  # НОВОЕ: Добавляем сценарий AI моделей
             ('admin_common', self.admin_common_scenario),
         ]
 
