@@ -110,4 +110,4 @@ class Config:
         if SQL_CONNECTION_STRING_READER:
             return str(SQL_CONNECTION_STRING_READER)
         # Fallback to hardcoded value
-        return "postgresql://bot_reader:sber@172.20.10.13:5432/sber_bot"
+        return "postgresql://bot_admin:sber@172.20.10.13:5432/sber_bot"
