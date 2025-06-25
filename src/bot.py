@@ -162,7 +162,6 @@ class UserStates(StatesGroup):
     INVESTMENT_ACTIONS = State()  # Выбор действия после executive summary
     INVESTMENT_QA = State()  # Режим вопросов-ответов по анализу
     INVESTMENT_REPORT_OPTIONS = State()  # Выбор способа получения отчета
-    ENTERING_EMAIL = State()  # Ввод email для отправки отчета
     CHOOSING_FINAL_ACTION = State()  # НОВОЕ: Выбор после получения отчета
 
 
@@ -2748,7 +2747,6 @@ class BotManager:
             'investment_qa': InvestmentQAHandler, 
             'back_to_investment_actions': BackToInvestmentActionsHandler, 
             'investment_report': InvestmentReportHandler, 
-            'email_input': EmailInputHandler,
             'final_actions': FinalActionsHandler,  # ДОБАВЛЯЕМ
         } 
         logger.info(f"Investment analysis scenario created: {list(self.investment_analysis_scenario.keys())}") 
