@@ -49,7 +49,7 @@ class Config:
             self._users = [int(user.strip()) for user in USERS.strip().split(',')]
             return self._users
         raise ConfigError('Please set `USERS` env var.')
-    https://github.com/glebsem2005/invest/blob/master/src/config.py
+
     @property
     def AUTHORIZED_USERS_IDS(self) -> Set[int]:
         return set([self.OWNER_ID] + self.ADMIN_USERS + self.USERS)
