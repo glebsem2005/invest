@@ -49,7 +49,7 @@ class Config:
             self._users = [int(user.strip()) for user in USERS.strip().split(',')]
             return self._users
         raise ConfigError('Please set `USERS` env var.')
-    
+    https://github.com/glebsem2005/invest/blob/master/src/config.py
     @property
     def AUTHORIZED_USERS_IDS(self) -> Set[int]:
         return set([self.OWNER_ID] + self.ADMIN_USERS + self.USERS)
@@ -62,7 +62,7 @@ class Config:
     def OPENAI_API_KEY(self) -> str:
         OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
         if OPENAI_API_KEY:
-            return "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"
+            return OPENAI_API_KEY
         raise ConfigError('Please set `OPENAI_API_KEY` env var.')
     
     OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-2024-08-06')
